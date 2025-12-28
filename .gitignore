@@ -1,0 +1,38 @@
+cd ~/dev/stm/projects/blinky && cat > .gitignore <<'EOF'
+# ===== Build artifacts =====
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_*
+
+# ===== Firmware outputs =====
+*.elf
+*.bin
+*.hex
+*.map
+
+# ===== Debug / tooling =====
+*.log
+*.lst
+*.o
+*.obj
+*.d
+*.su
+
+# ===== IDE / editor =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+.DS_Store
+
+# ===== OS junk =====
+Thumbs.db
+EOF
