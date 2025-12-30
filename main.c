@@ -1,42 +1,28 @@
 #include <stdint.h>
 
-#define PERIPH_BASE     (0x40000000UL)
-#define AHB2PERIPH_BASE (PERIPH_BASE + 0x08000000UL)  // STM32L4 AHB2
-#define GPIOA_BASE      (AHB2PERIPH_BASE + 0x0000UL)  // 0x48000000
+#define RCC_BASE        0x40021000UL
+#define RCC_AHBENR      (*(volatile uint32_t*)(RCC_BASE + 0x14UL))
 
-#define RCC_BASE        (PERIPH_BASE + 0x10000UL)     // 0x40021000
-#define RCC_AHB2ENR     (*(volatile uint32_t*)(RCC_BASE + 0x4CUL))
+#define GPIOB_BASE      0x48000400UL
+#define GPIOB_MODER     (*(volatile uint32_t*)(GPIOB_BASE + 0x00UL))
+#define GPIOB_BSRR      (*(volatile uint32_t*)(GPIOB_BASE + 0x18UL))
 
-#define GPIOA_MODER     (*(volatile uint32_t*)(GPIOA_BASE + 0x00UL))
-#define GPIOA_OTYPER    (*(volatile uint32_t*)(GPIOA_BASE + 0x04UL))
-#define GPIOA_BSRR      (*(volatile uint32_t*)(GPIOA_BASE + 0x18UL))
-
-static void delay(volatile uint32_t n)
-{
-    while (n--) {
-        __asm volatile ("nop");
-    }
-}
+static void delay(volatile uint32_t n) { while (n--) __asm volatile("nop"); }
 
 int main(void)
 {
-    /* Enable GPIOA clock (AHB2ENR bit0 = GPIOAEN) */
-    RCC_AHB2ENR |= (1u << 0);
+    // Enable GPIOB clock on STM32F0 (IOPBEN = bit 18 in RCC_AHBENR)
+    RCC_AHBENR |= (1U << 18);
 
-    /* PA5 output mode: MODER5 = 01 */
-    GPIOA_MODER &= ~(3u << (5u * 2u));
-    GPIOA_MODER |=  (1u << (5u * 2u));
+    // PB3 output (MODER3 = 01)
+    GPIOB_MODER &= ~(3U << (3 * 2));
+    GPIOB_MODER |=  (1U << (3 * 2));
 
-    /* Push-pull: OT5 = 0 */
-    GPIOA_OTYPER &= ~(1u << 5u);
-
-    while (1) {
-        /* set PA5 */
-        GPIOA_BSRR = (1u << 5u);
-        delay(200000);
-
-        /* reset PA5 */
-        GPIOA_BSRR = (1u << (5u + 16u));
-        delay(200000);
+    while (1)
+    {
+        GPIOB_BSRR = (1U << 3);        // PB3 high -> LD3 ON
+        delay(800000);
+        GPIOB_BSRR = (1U << (3+16));   // PB3 low  -> LD3 OFF
+        delay(800000);
     }
 }

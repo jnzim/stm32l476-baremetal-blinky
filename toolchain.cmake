@@ -4,7 +4,7 @@ set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-# Compilers (force the Arm toolchain, not Homebrew's arm-none-eabi-gcc)
+# Compilers
 set(CMAKE_C_COMPILER
     /Applications/ArmGNUToolchain/15.2.rel1/arm-none-eabi/bin/arm-none-eabi-gcc)
 set(CMAKE_ASM_COMPILER
@@ -16,6 +16,17 @@ set(CMAKE_OBJCOPY
 set(CMAKE_SIZE
     /Applications/ArmGNUToolchain/15.2.rel1/arm-none-eabi/bin/arm-none-eabi-size)
 
-# Prevent macOS from injecting host flags like -arch and -mmacosx-version-min
-set(CMAKE_OSX_ARCHITECTURES "")
-set(CMAKE_OSX_DEPLOYMENT_TARGET "")
+# --- CRITICAL: prevent macOS host flags from being injected ---
+set(CMAKE_C_COMPILER_WORKS 1)
+set(CMAKE_ASM_COMPILER_WORKS 1)
+
+set(CMAKE_OSX_ARCHITECTURES "" CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "" CACHE STRING "" FORCE)
+set(CMAKE_OSX_SYSROOT "" CACHE PATH "" FORCE)
+
+# Also clear any cached initial flags that might contain -arch/-isysroot
+set(CMAKE_C_FLAGS_INIT "" CACHE STRING "" FORCE)
+set(CMAKE_ASM_FLAGS_INIT "" CACHE STRING "" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_INIT "" CACHE STRING "" FORCE)
+
+
