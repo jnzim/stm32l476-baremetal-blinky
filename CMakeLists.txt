@@ -8,6 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 set(MCU cortex-m0)
 set(LDSCRIPT ${CMAKE_SOURCE_DIR}/linker/memory.ld)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(fw.elf
     src/main.c
@@ -15,9 +16,9 @@ add_executable(fw.elf
     startup/startup.s
 )
 
-# 👇 THIS IS THE FIX (your header lives in src/)
+
 target_include_directories(fw.elf PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
 )
 
 target_compile_definitions(fw.elf PRIVATE
@@ -57,6 +58,8 @@ target_link_options(fw.elf PRIVATE
         -lgcc
     -Wl,--end-group
 )
+
+
 
 # Force relink when linker script changes
 set_property(TARGET fw.elf APPEND PROPERTY LINK_DEPENDS ${LDSCRIPT})

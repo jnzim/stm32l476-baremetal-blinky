@@ -1,14 +1,12 @@
 STM32F042K6 Bare-Metal Blinky (No HAL, No CubeMX)
 ===============================================
 
-This project is a from-scratch bare-metal firmware for the
+This project is a **from-scratch bare-metal firmware** for the
 **NUCLEO-F042K6** (STM32F042K6, ARM Cortex-M0).
 
-Host OS: macOS  
-Toolchain: Arm GNU Toolchain (arm-none-eabi)  
-Build system: CMake (Unix Makefiles)  
-Debugger / Flash: ST-LINK (st-flash, st-util)  
-Editor: VS Code  
+The goal is to demonstrate **full MCU bring-up without vendor
+frameworks**, showing exactly what is required to boot, initialize,
+and run code on an STM32 microcontroller.
 
 No STM32 HAL.  
 No CubeMX.  
@@ -18,23 +16,33 @@ Everything required to boot the MCU and blink the onboard LED
 is implemented explicitly.
 
 ------------------------------------------------------------
+HOST & TOOLING
+------------------------------------------------------------
+
+Host OS: macOS  
+Toolchain: Arm GNU Toolchain (`arm-none-eabi`)  
+Build system: CMake (Unix Makefiles)  
+Flash / Debug: ST-LINK (`st-flash`, `st-util`)  
+Editor: VS Code  
+
+------------------------------------------------------------
 WHAT THIS PROJECT DEMONSTRATES
 ------------------------------------------------------------
 
 - Cross-compiling ARM Cortex-M firmware on macOS
-- Proper separation of host vs target build concerns
-- Explicit linker script defining FLASH and RAM layout
+- Proper separation of **host vs target** build concerns
+- Explicit linker script defining FLASH and SRAM layout
 - Custom startup code:
-  - Vector table
-  - Stack initialization
-  - .data copy (Flash → RAM)
-  - .bss zeroing
+  - Vector table definition
+  - Stack pointer initialization
+  - `.data` relocation (Flash → RAM)
+  - `.bss` zero-initialization
 - Safe exception handling with breakpoint traps
 - Register-level GPIO control (no HAL / CMSIS)
-- Professional CMake + toolchain setup
+- Professional CMake + cross-toolchain configuration
 - Flashing via ST-LINK using open-source tools
 - Debugging with GDB + Cortex-Debug
-- Binary inspection using nm, objdump, and size
+- Binary inspection using `nm`, `objdump`, and `size`
 
 ------------------------------------------------------------
 TARGET HARDWARE
@@ -58,28 +66,32 @@ blinky/
 ├── CMakeLists.txt
 ├── toolchain.cmake
 ├── linker/
-│   └── memory.ld
+│ └── memory.ld
 ├── startup/
-│   └── startup.s
+│ └── startup.s
 ├── src/
-│   ├── main.c
-│   └── system.c
+│ ├── main.c
+│ └── system.c
 └── .vscode/
-    ├── tasks.json
-    ├── launch.json
-    └── settings.json
+├── tasks.json
+├── launch.json
+└── settings.
+
 
 ------------------------------------------------------------
-TOOLCHAIN
+TOOLCHAIN SETUP
 ------------------------------------------------------------
 
-Compiler: arm-none-eabi-gcc  
+Compiler:   arm-none-eabi-gcc  
 Assembler: arm-none-eabi-gcc  
-Linker: arm-none-eabi-ld  
+Linker:    arm-none-eabi-ld  
 
-A CMake toolchain file is used to ensure this is treated as a
-bare-metal ARM target and to prevent macOS-specific flags
-(e.g. -arch arm64) from leaking into the build.
+A CMake toolchain file is used to:
+
+- Force use of the ARM cross-compiler
+- Mark the build as bare-metal (`CMAKE_SYSTEM_NAME=Generic`)
+- Prevent macOS-specific flags from leaking into the build
+- Disable host executable test runs during configuration
 
 ------------------------------------------------------------
 BUILD INSTRUCTIONS
