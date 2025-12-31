@@ -1,67 +1,71 @@
 #include <stdint.h>
+#include "stm32f0_regs.h"
 
-/* -------------------- Base addresses (STM32F0) -------------------- */
-#define RCC_BASE        0x40021000UL
-#define GPIOB_BASE      0x48000400UL
-
-/* -------------------- RCC registers -------------------- */
-#define RCC_CR          (*(volatile uint32_t *)(RCC_BASE + 0x00UL))
-#define RCC_CIR         (*(volatile uint32_t *)(RCC_BASE + 0x08UL))
-#define RCC_AHBENR      (*(volatile uint32_t *)(RCC_BASE + 0x14UL))
-
-/* RCC bits */
-#define RCC_CR_CSSON    (1u << 19)      /* Clock Security System enable */
-#define RCC_AHBENR_IOPBEN (1u << 18)    /* GPIOB clock enable */
-
-/* -------------------- GPIOB registers -------------------- */
-#define GPIOB_MODER     (*(volatile uint32_t *)(GPIOB_BASE + 0x00UL))
-#define GPIOB_OTYPER    (*(volatile uint32_t *)(GPIOB_BASE + 0x04UL))
-#define GPIOB_OSPEEDR   (*(volatile uint32_t *)(GPIOB_BASE + 0x08UL))
-#define GPIOB_PUPDR     (*(volatile uint32_t *)(GPIOB_BASE + 0x0CUL))
-#define GPIOB_BSRR      (*(volatile uint32_t *)(GPIOB_BASE + 0x18UL))
-
-/* NUCLEO-F042K6 user LED (LD3) is PB3 */
-#define LED_PIN         3u
+#define GPIO_MODE_INPUT   (0u)
+#define GPIO_MODE_OUTPUT  (1u)
+/* 2u = alternate, 3u = analog */
 
 static void delay(volatile uint32_t n)
 {
-    while (n--) {
-        __asm volatile ("nop");
-    }
+    while (n--) { __asm volatile ("nop"); }
+}
+
+/* ===== GPIOB helpers (no pointer passing, no macro-address tricks) ===== */
+static inline void gpiob_set_mode(uint32_t pin, uint32_t mode)
+{
+    const uint32_t shift = pin * 2u;          // MODER has 2 bits per pin
+    GPIOB_MODER &= ~(3u << shift);            // clear field
+    GPIOB_MODER |=  ((mode & 3u) << shift);   // write field
+}
+
+static inline void gpiob_set_pushpull(uint32_t pin)
+{
+    GPIOB_OTYPER &= ~(1u << pin);             // 0 = push-pull
+}
+
+static inline void gpiob_set_speed_low(uint32_t pin)
+{
+    const uint32_t shift = pin * 2u;
+    GPIOB_OSPEEDR &= ~(3u << shift);
+    GPIOB_OSPEEDR |=  (1u << shift);          // 01 = low speed
+}
+
+static inline void gpiob_set_nopull(uint32_t pin)
+{
+    const uint32_t shift = pin * 2u;
+    GPIOB_PUPDR &= ~(3u << shift);            // 00 = no pull
+}
+
+static inline void gpiob_set(uint32_t pin)
+{
+    GPIOB_BSRR = (1u << pin);                 // set pin
+}
+
+static inline void gpiob_reset(uint32_t pin)
+{
+    GPIOB_BSRR = (1u << (pin + 16u));         // reset pin
 }
 
 int main(void)
 {
-    /* ----------------------------------------------------------------
-       Prevent “mystery NMI” from clock security / clock interrupt flags
-       ---------------------------------------------------------------- */
-    RCC_CR  &= ~RCC_CR_CSSON;     /* Disable Clock Security System */
-    RCC_CIR  = 0xFFFFFFFFu;       /* Clear all RCC clock interrupt flags */
+    /* Optional safety during bring-up */
+    RCC_CR  &= ~RCC_CR_CSSON;
+    RCC_CIR  = 0xFFFFFFFFu;
 
-    /* Enable GPIOB peripheral clock */
+    /* Enable GPIOB clock */
     RCC_AHBENR |= RCC_AHBENR_IOPBEN;
 
-    /* Configure PB3 as general purpose output (MODER3 = 01) */
-    GPIOB_MODER &= ~(3u << (LED_PIN * 2));
-    GPIOB_MODER |=  (1u << (LED_PIN * 2));
+    /* PBx config */
+    gpiob_set_mode(LED_PIN, GPIO_MODE_OUTPUT);
+    gpiob_set_pushpull(LED_PIN);
+    gpiob_set_speed_low(LED_PIN);
+    gpiob_set_nopull(LED_PIN);
 
-    /* Push-pull output */
-    GPIOB_OTYPER &= ~(1u << LED_PIN);
-
-    /* Low speed is fine */
-    GPIOB_OSPEEDR &= ~(3u << (LED_PIN * 2));
-    GPIOB_OSPEEDR |=  (1u << (LED_PIN * 2));
-
-    /* No pull-up / pull-down */
-    GPIOB_PUPDR &= ~(3u << (LED_PIN * 2));
-
-    while (1) {
-        /* Set PB3 */
-        GPIOB_BSRR = (1u << LED_PIN);
+    while (1) 
+    {
+        gpiob_set(LED_PIN);
         delay(250000);
-
-        /* Reset PB3 */
-        GPIOB_BSRR = (1u << (LED_PIN + 16u));
+        gpiob_reset(LED_PIN);
         delay(250000);
     }
 }

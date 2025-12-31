@@ -15,6 +15,11 @@ add_executable(fw.elf
     startup/startup.s
 )
 
+# 👇 THIS IS THE FIX (your header lives in src/)
+target_include_directories(fw.elf PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+)
+
 target_compile_definitions(fw.elf PRIVATE
     STM32F042x6
 )
