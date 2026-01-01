@@ -16,16 +16,10 @@
 #include <stdint.h>
 #include "stm32f0_regs.h"
 #include "board.h"
+#include "systick.h"
 
-// ----------------------------
-// Simple busy-wait delay.
-// This is NOT time-accurate; it just burns CPU cycles.
-// Use for quick bring-up only.
-// ----------------------------
-static void delay(volatile uint32_t n)
-{
-    while (n--) { __asm volatile ("nop"); }
-}
+
+
 
 // ============================================================
 // GPIO helpers
@@ -176,6 +170,13 @@ int main(void)
     RCC_AHBENR |= RCC_AHBENR_IOPBEN;
 
     // ------------------------------------------------------------
+    // Initialize SysTick AFTER clock is stable
+    // ------------------------------------------------------------ */
+    #define CPU_HZ 8000000u
+    #define SYSTICK_RELOAD ((CPU_HZ / 1000u) - 1u)
+    systick_init_reload(SYSTICK_RELOAD);
+
+    // ------------------------------------------------------------
     // Configure LED pin as output:
     //  - Mode = output
     //  - Output type = push-pull
@@ -199,10 +200,10 @@ int main(void)
     {
         gpio_set(LED_GPIO_BASE, LED_PIN);
         usart2_puts_ln("LED ON");
-        delay(250000);
+        delay_ms(250);
 
         gpio_reset(LED_GPIO_BASE, LED_PIN);
         usart2_puts_ln("LED OFF");
-        delay(250000);
+        delay_ms(250);
     }
 }

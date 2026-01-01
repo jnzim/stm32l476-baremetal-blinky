@@ -214,4 +214,40 @@
  */
 #define USART_ISR_TXE    (1u << 7)
 
+
+
+/* ================= SysTick (Cortex-M0 core timer) =================
+ * SysTick is a CPU core peripheral (not an STM32 peripheral).
+ * Base address is part of the ARM Cortex-M memory map.
+ */
+
+#define SYSTICK_BASE    (0xE000E010UL)
+
+/* SYST_CSR — Control and Status Register
+ * ENABLE: enable counter
+ * TICKINT: enable SysTick interrupt
+ * CLKSOURCE: 1 = processor clock, 0 = external reference (rare)
+ * COUNTFLAG: set when counter reaches 0 (read-only)
+ */
+#define SYST_CSR        (*(volatile uint32_t *)(SYSTICK_BASE + 0x00UL))
+
+/* SYST_RVR — Reload Value Register
+ * Value loaded when counter reaches 0.
+ */
+#define SYST_RVR        (*(volatile uint32_t *)(SYSTICK_BASE + 0x04UL))
+
+/* SYST_CVR — Current Value Register
+ * Writing any value clears the counter to 0.
+ */
+#define SYST_CVR        (*(volatile uint32_t *)(SYSTICK_BASE + 0x08UL))
+
+/* Bits */
+#define SYST_CSR_ENABLE     (1u << 0)
+#define SYST_CSR_TICKINT    (1u << 1)
+#define SYST_CSR_CLKSOURCE  (1u << 2)
+#define SYST_CSR_COUNTFLAG  (1u << 16)
+
+
+
+
 #endif /* STM32F0_REGS_H */

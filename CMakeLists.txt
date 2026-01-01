@@ -14,6 +14,7 @@ add_executable(fw.elf
     src/main.c
     src/system.c
     startup/startup.s
+    src/systick.c
 )
 
 

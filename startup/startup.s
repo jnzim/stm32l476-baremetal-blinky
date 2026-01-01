@@ -40,6 +40,7 @@ g_pfnVectors:
   .word 0                /* Reserved */
   .word PendSV_Handler   /* PendSV Handler */
   .word SysTick_Handler  /* SysTick Handler */
+  
 
   /* External Interrupts (IRQs) - STM32F0 has up to 32 here; we provide 32. */
   .word IRQ0_Handler
@@ -156,11 +157,15 @@ PendSV_Handler:
   bkpt #0
   b .
 
-.global SysTick_Handler
-.type SysTick_Handler, %function
-SysTick_Handler:
-  bkpt #0
-  b .
+
+
+.word 0                /* Reserved */
+.word PendSV_Handler    /* PendSV Handler */
+.word SysTick_Handler   /* SysTick Handler */
+
+.weak SysTick_Handler
+.thumb_set SysTick_Handler, Default_Handler
+
 
 /* Default catch-all for any IRQ you didn't implement */
 .global Default_Handler
