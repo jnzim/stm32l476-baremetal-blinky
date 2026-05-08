@@ -1,4 +1,4 @@
-cd ~/dev/stm/projects/blinky && cat > .gitignore <<'EOF'
+cd ~/dev/stm/projects/drive && cat > .gitignore <<'EOF'
 # ===== Build artifacts =====
 build/
 out/
@@ -10,13 +10,11 @@ Makefile
 *.ninja
 .ninja_*
 compile_commands.json
-
 # ===== Firmware outputs =====
 *.elf
 *.bin
 *.hex
 *.map
-
 # ===== Debug / tooling =====
 *.log
 *.lst
@@ -24,7 +22,6 @@ compile_commands.json
 *.obj
 *.d
 *.su
-
 # ===== IDE / editor =====
 .vscode/
 .idea/
@@ -33,7 +30,8 @@ compile_commands.json
 *.bak
 *.tmp
 .DS_Store
-
+# ===== clangd cache =====
+.cache/
 # ===== OS junk =====
 Thumbs.db
 EOF
