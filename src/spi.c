@@ -42,6 +42,7 @@
 
 // -----------------------------------------------------------------------------
 // Telem double-buffer
+
 // Two slots. TIM1 ISR always writes to the inactive slot and flips the index.
 // DMA TX always reads from the other slot.
 // volatile = tell compiler "don't cache these in registers, don't reorder writes,
