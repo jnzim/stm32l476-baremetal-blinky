@@ -1,29 +1,29 @@
 cmake_minimum_required(VERSION 3.21)
-
 project(blinky LANGUAGES C ASM)
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-
-set(MCU cortex-m0)
+set(MCU cortex-m4)
+set(FPU cortex-m4)
 set(LDSCRIPT ${CMAKE_SOURCE_DIR}/linker/memory.ld)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(fw.elf
     src/main.c
-    src/system.c
-    startup/startup.s
-    src/systick.c
+    src/spi.c
+    src/encoder.c
+    src/system_stm32f4xx.c
+    startup/startup_stm32f446xx.s
 )
-
 
 target_include_directories(fw.elf PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Device/ST/STM32F4xx/Include
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Include
 )
 
 target_compile_definitions(fw.elf PRIVATE
-    STM32F042x6
+    STM32F446xx
 )
 
 target_compile_options(fw.elf PRIVATE
@@ -46,12 +46,14 @@ target_compile_options(fw.elf PRIVATE
     >
 )
 
+
+
 target_link_options(fw.elf PRIVATE
     -mcpu=${MCU}
     -mthumb
     -T${LDSCRIPT}
     -nostartfiles
-    -nostdlib
+    -specs=nosys.specs
     -Wl,--gc-sections
     -Wl,-Map=${CMAKE_BINARY_DIR}/fw.map
     -Wl,--start-group
@@ -60,7 +62,7 @@ target_link_options(fw.elf PRIVATE
     -Wl,--end-group
 )
 
-
+target_link_libraries(fw.elf PRIVATE gcc)
 
 # Force relink when linker script changes
 set_property(TARGET fw.elf APPEND PROPERTY LINK_DEPENDS ${LDSCRIPT})
