@@ -12,6 +12,7 @@ add_executable(fw.elf
     src/main.c
     src/spi.c
     src/encoder.c
+    src/ringBuffer.c
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )

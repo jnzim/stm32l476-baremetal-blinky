@@ -37,6 +37,15 @@ typedef struct __attribute__((packed)) {
 } TelemetryFrame;
 
 // =============================================================================
+// TrajSample — one trajectory sample from Pi, 8 bytes
+// Packed into DATA packets and pushed to the STM ring buffer
+// =============================================================================
+typedef struct __attribute__((packed)) {
+    int32_t pos_cmd;  // position setpoint, encoder counts, little-endian
+    int32_t vel_ff;   // velocity feedforward, counts/sec, little-endian
+} TrajSample;
+
+// =============================================================================
 // Drive states — values for TelemetryFrame.drive_state
 // =============================================================================
 #define DRIVE_IDLE     0x00u  // powered, PWM disabled, waiting for enable
@@ -74,3 +83,5 @@ typedef struct __attribute__((packed)) {
 // [3]     uint8_t    CRC8 XOR over bytes 0-2
 // [4-23]  uint8_t    pad 0x00
 // =============================================================================
+
+
