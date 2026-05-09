@@ -16,11 +16,14 @@ add_executable(fw.elf
     startup/startup_stm32f446xx.s
 )
 
+
+
 target_include_directories(fw.elf PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Device/ST/STM32F4xx/Include
     ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Include
 )
+
 
 target_compile_definitions(fw.elf PRIVATE
     STM32F446xx
