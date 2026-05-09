@@ -21,3 +21,6 @@ extern volatile uint8_t        telem_write_idx;
 // Public interface
 // =============================================================================
 void spi_init(void);  // call once at startup after SystemClock_Config
+
+
+void spi_process(void);

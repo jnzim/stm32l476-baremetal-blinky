@@ -83,5 +83,3 @@ typedef struct __attribute__((packed)) {
 // [3]     uint8_t    CRC8 XOR over bytes 0-2
 // [4-23]  uint8_t    pad 0x00
 // =============================================================================
-
-

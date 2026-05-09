@@ -1,13 +1,14 @@
 ENTRY(Reset_Handler)
 
-/* STM32F042K6
- * Flash: 32 KB  (0x0800_0000 .. 0x0800_7FFF)
- * SRAM : 6 KB   (0x2000_0000 .. 0x2000_17FF)
+/* STM32F446RE
+ * Flash: 512 KB  (0x0800_0000 .. 0x0807_FFFF)
+ * SRAM : 128 KB  (0x2000_0000 .. 0x2001_FFFF)
  */
+
 MEMORY
 {
-  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 32K
-  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 6K
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
 }
 
 /* initial stack pointer = top of SRAM */
@@ -45,6 +46,5 @@ SECTIONS
     _ebss = .;
   } > RAM
 
-  /* Optional: helpful end-of-RAM symbol */
   _end = .;
 }
