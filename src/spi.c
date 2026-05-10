@@ -136,7 +136,7 @@ void DMA1_Stream3_IRQHandler(void)
             if (crc != local[9]) { cnt_error++; break; }
             TrajSample s;
             memcpy(&s.pos_cmd, &local[1], sizeof(int32_t));
-            memcpy(&s.vel_ff,  &local[5], sizeof(int32_t));
+            memcpy(&s.vel_cmd,  &local[5], sizeof(int32_t));
             ring_push(&s);
             cnt_data++;
             break;

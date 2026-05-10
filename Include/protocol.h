@@ -42,7 +42,7 @@ typedef struct __attribute__((packed)) {
 // =============================================================================
 typedef struct __attribute__((packed)) {
     int32_t pos_cmd;  // position setpoint, encoder counts, little-endian
-    int32_t vel_ff;   // velocity feedforward, counts/sec, little-endian
+    int32_t vel_cmd;   // velocity feedforward, counts/sec, little-endian
 } TrajSample;
 
 // =============================================================================
