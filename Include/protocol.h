@@ -26,14 +26,15 @@
 // All multi-byte fields are little-endian (STM32 and Pi 4/5 are both little-endian)
 // =============================================================================
 typedef struct __attribute__((packed)) {
-    int32_t  pos_cmd;       // position command, encoder counts
-    int32_t  pos_fbk;       // position feedback from TIM5, encoder counts
-    int16_t  vel_cmd;       // velocity command, counts/sec
-    int16_t  vel_fbk;       // dx/dt computed in velocity loop, counts/sec
-    uint32_t timestamp_ms;  // STM millisecond counter — use this for Bode plot time axis
-    uint8_t  drive_state;   // DriveState enum value
-    uint8_t  fault_flags;   // fault bitmask
-    uint8_t  _pad[6];       // reserved, always 0x00, pads to 24 bytes
+    int32_t  pos_cmd;
+    int32_t  pos_fbk;
+    int16_t  vel_cmd;
+    int16_t  vel_fbk;
+    uint32_t timestamp_ms;
+    uint8_t  drive_state;
+    uint8_t  fault_flags;
+    uint32_t samples_consumed;  // incremented each ring_pop — Pi uses this to detect move complete
+    uint8_t  _pad[2];           // 2 bytes remaining, always 0x00
 } TelemetryFrame;
 
 // =============================================================================

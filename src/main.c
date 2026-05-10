@@ -7,17 +7,20 @@
 #define READY_SET_HIGH  (1u << READY_PIN)
 #define READY_CLR_LOW   (1u << (READY_PIN + 16u))
 
-volatile uint32_t debug_ring_count = 0;
-volatile uint32_t tick_ms          = 0;
+volatile uint32_t debug_ring_count  = 0;
+volatile uint32_t tick_ms           = 0;
+volatile uint32_t samples_consumed = 0;
+
 
 void SysTick_Handler(void) {
     tick_ms++;
 
     TrajSample s;
     if (ring_pop(&s)) {
-        telem_buf[1].pos_cmd      = s.pos_cmd;
-        telem_buf[1].vel_cmd      = (int16_t)s.vel_cmd;
-        telem_buf[1].timestamp_ms = tick_ms;
+        telem_buf[1].pos_cmd            = s.pos_cmd;
+        telem_buf[1].vel_cmd            = (int16_t)s.vel_cmd;
+        telem_buf[1].timestamp_ms       = tick_ms;
+        telem_buf[1].samples_consumed   = ++samples_consumed;
     }
 
     debug_ring_count = ring.count;
