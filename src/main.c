@@ -9,7 +9,6 @@
 
 volatile uint32_t debug_ring_count  = 0;
 volatile uint32_t tick_ms           = 0;
-volatile uint32_t samples_consumed = 0;
 
 
 void SysTick_Handler(void) {

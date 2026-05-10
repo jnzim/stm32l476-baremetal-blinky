@@ -34,9 +34,11 @@ volatile uint8_t        telem_write_idx = 0;
 static volatile uint8_t spi2_rx_buf[SPI2_PKT_LEN];
 
 // ── Diagnostic counter (remove when stable) ──────────────────────────────────
-volatile uint32_t cnt_data   = 0;
-volatile uint32_t cnt_telem  = 0;
-volatile uint32_t cnt_error  = 0;
+volatile uint32_t cnt_data          = 0;
+volatile uint32_t cnt_telem         = 0;
+volatile uint32_t cnt_error         = 0;
+// ── Reset after each move  ──────────────────────────────────
+volatile uint32_t samples_consumed  = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_init
@@ -145,9 +147,13 @@ void DMA1_Stream3_IRQHandler(void)
             cnt_telem++;
             break;
         case SPI2_OP_BLOCK_HDR:
+            ring_reset();
+            samples_consumed = 0;
+            telem_buf[1].samples_consumed = 0;
             break;
         case SPI2_OP_READY_ACK:
             break;
+
         default:
             cnt_error++;
             break;
