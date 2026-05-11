@@ -18,6 +18,8 @@ extern volatile TelemetryFrame telem_buf[2];
 extern volatile uint8_t        telem_write_idx;
 
 extern volatile uint32_t samples_consumed;
+
+extern volatile uint8_t sim_active;
 // =============================================================================
 // Public interface
 // =============================================================================

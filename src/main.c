@@ -80,7 +80,7 @@ void SysTick_Handler(void)
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = 0;   // clear update interrupt flag
-
+    if (!sim_active) return;  
     // current loop — 20 kHz
     // error = commanded current - simulated current
     // output = voltage applied to motor (v_q)
@@ -154,9 +154,9 @@ int main(void)
     // ── Plant and controller init ─────────────────────────────────────────────
     // Gains are placeholder — tune after sim validation with matplotlib.
     plant_init(&plant);
-    pi_init(&current_loop,  0.5f,  10.0f, -24.0f, 24.0f);   // Kp, Ki, out_min, out_max
-    pi_init(&velocity_loop, 0.01f,  0.1f,  -5.0f,  5.0f);
-    p_init(&position_loop,  1.0f);
+pi_init(&current_loop,  5.0f,   0.0f,  -24.0f, 24.0f);  // Ki=0
+pi_init(&velocity_loop, 0.005f, 0.0f,   -3.0f,  3.0f);  // Ki=0
+p_init(&position_loop,  1.0f);
 
     // ── Peripheral init ───────────────────────────────────────────────────────
     spi_init();
