@@ -2,6 +2,7 @@
 #define PLANT_H
 
 #include <stdint.h>
+#include "protocol.h"
 
 #define PLANT_R         3.25f
 #define PLANT_L         0.0018f
@@ -10,9 +11,11 @@
 #define PLANT_B         1.0e-6f
 
 typedef struct {
-    float vel;
-    float pos;
-    float i_q;
+    float   vel;        // rad/s
+    float   pos;        // rad
+    float   i_q;        // A
+    int32_t pos_counts; // encoder counts
+    int32_t vel_counts; // counts/sec
 } PlantState;
 
 void  plant_init(PlantState *s);

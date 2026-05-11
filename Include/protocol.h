@@ -5,6 +5,11 @@
 #pragma once
 #include <stdint.h>
 
+#define ENCODER_CPR         2048u                   // counts per revolution (raw)
+#define ENCODER_COUNTS_REV  (ENCODER_CPR * 4u)      // 4x quadrature decode = 8192
+#define COUNTS_PER_RAD      (ENCODER_COUNTS_REV / 6.2832f)
+
+
 // =============================================================================
 // Opcodes — byte 0 of every 24-byte SPI transaction
 // =============================================================================

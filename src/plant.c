@@ -2,9 +2,11 @@
 
 void plant_init(PlantState *s)
 {
-    s->vel = 0.0f;
-    s->pos = 0.0f;
-    s->i_q = 0.0f;
+    s->vel          = 0.0f;
+    s->pos          = 0.0f;
+    s->i_q          = 0.0f;
+    s->pos_counts   = 0;
+    s->vel_counts   = 0;
 }
 
 void plant_step(PlantState *s, float v_q, float dt)
@@ -19,4 +21,7 @@ void plant_step(PlantState *s, float v_q, float dt)
     s->vel += accel * dt;
     s->pos += s->vel * dt;
     s->i_q  = v_q / PLANT_R;
+    
+    s->pos_counts = (int32_t)(s->pos * COUNTS_PER_RAD);
+    s->vel_counts = (int32_t)(s->vel * COUNTS_PER_RAD);
 }

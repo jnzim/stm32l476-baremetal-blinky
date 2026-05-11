@@ -4,6 +4,7 @@
 #include "ringBuffer.h"
 #include "plant.h"
 #include "control.h"
+#include "protocol.h"
 
 // ── READY signal — PC13, active low → Pi refills ring buffer ─────────────────
 #define READY_PIN       13u
@@ -51,9 +52,11 @@ void SysTick_Handler(void)
         telem_buf[1].timestamp_ms     = tick_ms;
         telem_buf[1].samples_consumed = ++samples_consumed;
 
-        // position loop — 1 kHz
-        // error in encoder counts, output is velocity setpoint (rad/s)
-        float pos_err = (float)s.pos_cmd - plant.pos;
+
+        telem_buf[1].pos_fbk = plant.pos_counts;
+        telem_buf[1].vel_fbk = (int16_t)plant.vel_counts;
+
+        float pos_err = (float)(s.pos_cmd - plant.pos_counts);
         vel_cmd = p_step(&position_loop, pos_err);
     }
 
@@ -92,7 +95,9 @@ void TIM1_UP_TIM10_IRQHandler(void)
     // output = current setpoint (iq_cmd)
     if (++vel_div >= 4) {
         vel_div = 0;
-        float v_err = vel_cmd - plant.vel;
+
+        // velocity loop — compare in counts/sec
+        float v_err = (float)vel_cmd - (float)plant.vel_counts;
         iq_cmd = pi_step(&velocity_loop, v_err, DT_VELOCITY);
     }
 }
