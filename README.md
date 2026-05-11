@@ -1,105 +1,72 @@
-STM32F042K6 Bare-Metal Blinky (No HAL, No CubeMX)
-===============================================
+# stm32-servo-drive
 
-This project is a **from-scratch bare-metal firmware** for the
-**NUCLEO-F042K6** (STM32F042K6, ARM Cortex-M0).
+Bare metal STM32F446RE servo drive firmware. Closes FOC current, velocity, and position control loops from scratch — no HAL, no RTOS, no commercial drive.
 
-The goal is to demonstrate **full MCU bring-up without vendor
-frameworks**, showing exactly what is required to boot, initialize,
-and run code on an STM32 microcontroller.
+Companion trajectory streamer: [servo-trajectory-streamer](https://github.com/jnzim/servo-trajectory-streamer)
 
-No STM32 HAL.  
-No CubeMX.  
-No IDE-generated startup code.
+## What it does
 
-Everything required to boot the MCU and blink the onboard LED
-is implemented explicitly.
+- Receives trapezoidal trajectory samples from Raspberry Pi over SPI2 + DMA
+- Buffers 4096 samples in a ring buffer, asserts PC13 READY for refill at 2048
+- Runs three rate-divided control loops in a single hard-RT ISR hierarchy
+- Simulated plant model (2nd order motor, Euler integration) for SW validation before hardware
+- Streams 24-byte telemetry frames back to Pi on every SPI transaction
+- Telemetry includes position command, position feedback, velocity feedback, samples consumed
 
-------------------------------------------------------------
-HOST & TOOLING
-------------------------------------------------------------
+## Hardware
 
-Host OS: macOS  
-Toolchain: Arm GNU Toolchain (`arm-none-eabi`)  
-Build system: CMake (Unix Makefiles)  
-Flash / Debug: ST-LINK (`st-flash`, `st-util`)  
-Editor: VS Code  
+- STM32F446RE Nucleo-64
+- DRV8353RS-EVM gate driver (15A/20A peak, 9-95V, integrated 3-shunt current sensing)
+- Kollmorgen AKM11E-ANCN2-00 BLDC servo motor
+- 2048 CPR quadrature encoder (TIM5, 4x decode = 8192 counts/rev)
+- Raspberry Pi 4/5 as trajectory supervisor via SPI2
 
-------------------------------------------------------------
-WHAT THIS PROJECT DEMONSTRATES
-------------------------------------------------------------
+## Pin mapping
 
-- Cross-compiling ARM Cortex-M firmware on macOS
-- Proper separation of **host vs target** build concerns
-- Explicit linker script defining FLASH and SRAM layout
-- Custom startup code:
-  - Vector table definition
-  - Stack pointer initialization
-  - `.data` relocation (Flash → RAM)
-  - `.bss` zero-initialization
-- Safe exception handling with breakpoint traps
-- Register-level GPIO control (no HAL / CMSIS)
-- Professional CMake + cross-toolchain configuration
-- Flashing via ST-LINK using open-source tools
-- Debugging with GDB + Cortex-Debug
-- Binary inspection using `nm`, `objdump`, and `size`
+| Peripheral | Pins | Notes |
+|---|---|---|
+| TIM1 PWM 3-phase | PA8, PA7, PA9, PB0, PA10, PB1 | Center-aligned |
+| TIM5 encoder | PA0, PA1 | 32-bit counter |
+| ADC1 current sensing | PA4, PC1, PC4 | Triggered by TIM1 |
+| SPI1 DRV8353RS | PA5, PA6, PB5, PB6 | Gate driver config |
+| SPI2 Raspberry Pi | PB12, PB13, PB14, PB15 | Trajectory + telem |
+| PC13 READY | PC13 | Active low refill signal |
 
-------------------------------------------------------------
-TARGET HARDWARE
-------------------------------------------------------------
+## Architecture
 
-Board: NUCLEO-F042K6  
-MCU:   STM32F042K6 (ARM Cortex-M0)  
-Flash: 32 KB  
-SRAM:  6 KB  
+    Pi -> SPI2 -> ring buffer (4096 samples)
+                       |
+                  1kHz SysTick
+                  position loop (P)
+                       |
+                  velocity setpoint
+                       |
+                  5kHz TIM1 /4
+                  velocity loop (PI)
+                       |
+                  current setpoint
+                       |
+                  20kHz TIM1
+                  current loop (PI)
+                       |
+                  plant model / PWM
 
-User LED:
-- LD3
-- GPIOB pin PB3 (Arduino D13)
+## Build
 
-------------------------------------------------------------
-PROJECT LAYOUT
-------------------------------------------------------------
+    cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build -j
+    st-flash --reset write build/fw.bin 0x08000000
 
-blinky/
-├── README.md
-├── CMakeLists.txt
-├── toolchain.cmake
-├── linker/
-│ └── memory.ld
-├── startup/
-│ └── startup.s
-├── src/
-│ ├── main.c
-│ └── system.c
-└── .vscode/
-├── tasks.json
-├── launch.json
-└── settings.
+## Status
 
+- SPI2 slave DMA circular: proven — 5007 packets, 0 errors
+- Ring buffer + READY refill: proven
+- TIM1 20kHz ISR: running
+- Plant model 2nd order sim: running, gain tuning in progress
+- FOC Park/Clarke transforms: not yet
+- Real PWM output: not yet
+- Motor spin: not yet
 
-------------------------------------------------------------
-TOOLCHAIN SETUP
-------------------------------------------------------------
+## Project goal
 
-Compiler:   arm-none-eabi-gcc  
-Assembler: arm-none-eabi-gcc  
-Linker:    arm-none-eabi-ld  
-
-A CMake toolchain file is used to:
-
-- Force use of the ARM cross-compiler
-- Mark the build as bare-metal (`CMAKE_SYSTEM_NAME=Generic`)
-- Prevent macOS-specific flags from leaking into the build
-- Disable host executable test runs during configuration
-
-------------------------------------------------------------
-BUILD INSTRUCTIONS
-------------------------------------------------------------
-
-From the project root:
-
-```sh
-rm -rf build
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake
-cmake --build build
+Demonstrate full-stack servo drive competency — trajectory generation, SPI comms, bare metal STM32, and closed-loop FOC from scratch. Target applications: semiconductor capital equipment (KLA, ASML, Aerotech, Lam Research).
