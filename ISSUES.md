@@ -23,6 +23,10 @@
 
 - **VS Code CMake Tools stomps toolchain** — must build from terminal, not F5 or CMake Tools UI. Documented in README.
 
+## Simulation Results
+
+![Position and velocity tracking](docs/plots/sim_position_velocity_tracking.png)
+
 ## Resolved
 
 - **sim_active startup transient** — fixed with state machine, plant_init() on STATE_ENABLED entry
