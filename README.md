@@ -70,3 +70,5 @@ Companion trajectory streamer: [servo-trajectory-streamer](https://github.com/jn
 ## Project goal
 
 Demonstrate full-stack servo drive competency — trajectory generation, SPI comms, bare metal STM32, and closed-loop FOC from scratch. Target applications: semiconductor capital equipment (KLA, ASML, Aerotech, Lam Research).
+
+

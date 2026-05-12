@@ -45,11 +45,11 @@ volatile uint32_t tick_ms          = 0;
 void SysTick_Handler(void)
 {
     tick_ms++;
-
+    drive_update();   // state machine — runs every tick
     TrajSample s;
     if (ring_pop(&s)) 
     {
-        drive_update();
+
         
         telem_buf[1].pos_cmd          = s.pos_cmd;
         telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
@@ -61,8 +61,8 @@ void SysTick_Handler(void)
         telem_buf[1].vel_fbk = (int16_t)plant.vel_counts;
 
         float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-        //vel_cmd = p_step(&position_loop, pos_err);
-        vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;
+        vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
+                                        + (float)s.vel_cmd / COUNTS_PER_RAD;
     }
 
     debug_ring_count = ring.count;

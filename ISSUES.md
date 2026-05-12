@@ -2,8 +2,6 @@
 
 ## Control Loop
 
-- **sim_active startup transient** — plant spikes at t=0 before settling. First ring_pop triggers plant_init while TIM1 may already be mid-tick. Needs proper state machine to fix cleanly.
-- **No state machine** — sim_active flag is a hack. Needs proper DRIVE_IDLE → DRIVE_ENABLED transition tied to first trajectory block, not first ring_pop.
 - **Position loop no feedforward** — will lag on fast profiles. Add vel_cmd feedforward from trajectory sample before hardware bring-up.
 - **PLANT_B artificially high** — set to 0.001 to prevent instability during sim tuning. Not realistic for AKM11E. Tune to real motor specs once hardware available.
 - **Velocity loop units inconsistent** — vel_cmd is in rad/s internally but vel_fbk is logged in counts/sec. Confusing for analysis. Standardize to one or the other.
@@ -24,3 +22,8 @@
 ## Build / Toolchain
 
 - **VS Code CMake Tools stomps toolchain** — must build from terminal, not F5 or CMake Tools UI. Documented in README.
+
+## Resolved
+
+- **sim_active startup transient** — fixed with state machine, plant_init() on STATE_ENABLED entry
+- **No state machine** — drive.c implemented, IDLE → ENABLED on BLOCK_HDR
