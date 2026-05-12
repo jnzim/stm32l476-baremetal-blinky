@@ -15,6 +15,7 @@ add_executable(fw.elf
     src/ringBuffer.c
     src/plant.c
     src/control.c
+    src/drive.c
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )

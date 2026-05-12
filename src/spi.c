@@ -17,6 +17,7 @@
 #include "ringBuffer.h"
 #include "stm32f4xx.h"
 #include <string.h>
+#include "drive.h"
 
 // ── Opcodes — use protocol.h constants, no local redefinition ────────────────
 // SPI2_OP_BLOCK_HDR 0x03, SPI2_OP_DATA 0x04, SPI2_OP_READY_ACK 0x05, SPI2_OP_TELEM_REQ 0x06
@@ -39,7 +40,7 @@ volatile uint32_t cnt_telem         = 0;
 volatile uint32_t cnt_error         = 0;
 // ── Reset after each move  ──────────────────────────────────
 volatile uint32_t samples_consumed  = 0;
-volatile uint8_t sim_active         = 0;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_init
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ void DMA1_Stream3_IRQHandler(void)
             ring_reset();
             samples_consumed = 0;
             telem_buf[1].samples_consumed = 0;
-
+            drive_request_enable();
             break;
         case SPI2_OP_READY_ACK:
             break;

@@ -5,6 +5,7 @@
 #include "plant.h"
 #include "control.h"
 #include "protocol.h"
+#include "drive.h"
 
 // ── READY signal — PC13, active low → Pi refills ring buffer ─────────────────
 #define READY_PIN       13u
@@ -48,11 +49,7 @@ void SysTick_Handler(void)
     TrajSample s;
     if (ring_pop(&s)) 
     {
-         if (!sim_active) 
-         {
-            sim_active = 1;
-            plant_init(&plant);
-        }
+        drive_update();
         
         telem_buf[1].pos_cmd          = s.pos_cmd;
         telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
@@ -88,7 +85,7 @@ void SysTick_Handler(void)
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = 0;
-    if (!sim_active) return;
+
 
     // velocity loop — 5 kHz (÷4)
     if (++vel_div >= 4) {
