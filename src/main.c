@@ -87,7 +87,7 @@ void SysTick_Handler(void)
 // ─────────────────────────────────────────────────────────────────────────────
 void TIM1_UP_TIM10_IRQHandler(void)
 {
-TIM1->SR = 0;
+    TIM1->SR = 0;
     if (!sim_active) return;
 
     // velocity loop — 5 kHz (÷4)
@@ -95,12 +95,10 @@ TIM1->SR = 0;
         vel_div = 0;
         float v_err = vel_cmd - plant.vel;
         iq_cmd = pi_step(&velocity_loop, v_err, DT_VELOCITY);
-
-        
     }
-
-    // direct current → voltage, no current loop yet
-    v_q_cmd = iq_cmd * PLANT_R;
+    // current loop — 20 kHz
+    float i_err = iq_cmd - plant.i_q;
+    v_q_cmd = pi_step(&current_loop, i_err, DT_CURRENT);
 
     plant_step(&plant, v_q_cmd, DT_CURRENT);
   
@@ -158,9 +156,9 @@ int main(void)
     // ── Plant and controller init ─────────────────────────────────────────────
     // Gains are placeholder — tune after sim validation with matplotlib.
     plant_init(&plant);
-pi_init(&velocity_loop, 0.1f, 0.0f, -5.0f, 5.0f);
-p_init(&position_loop,  1.0f);
-
+    pi_init(&current_loop,  3.0f,  0.0f, -24.0f, 24.0f);
+    pi_init(&velocity_loop, 0.1f,  0.0f,  -5.0f,  5.0f);
+    p_init(&position_loop, 10.0f);
 
     // ── Peripheral init ───────────────────────────────────────────────────────
     spi_init();
