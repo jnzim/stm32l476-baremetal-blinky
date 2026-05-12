@@ -70,7 +70,7 @@ Companion trajectory streamer: [servo-trajectory-streamer](https://github.com/jn
 
 ## Simulation Results
 
-![Position and velocity tracking](sim_results.png)
+![Position and velocity tracking](docs/plots/sim_results.png)
 
 ## Project goal
 
