@@ -79,7 +79,8 @@ uint8_t drive_is_entry(void)
 void drive_update(void)
 {
     // fault takes priority from any state — latches immediately
-    if (fault_req) {
+    if (fault_req) 
+    {
         state     = STATE_FAULT;
         fault_req = 0;
         return;
@@ -95,7 +96,8 @@ void drive_update(void)
           
             // waiting for trajectory block from Pi
             // BLOCK_HDR received → DMA ISR sets enable_req → transition to ENABLED
-            if (enable_req) {
+            if (enable_req) 
+            {
                 enable_req = 0;
                 // sim mode: skip alignment, go straight to ENABLED
                 // real HW: transition to STATE_ALIGN here instead
@@ -111,7 +113,8 @@ void drive_update(void)
             break;
 
         case STATE_ENABLED:
-            if (entry) {
+            if (entry) 
+            {
                 // first tick in ENABLED — one-time init
                 // plant_init() or integrator reset goes here
                 // replaces the sim_active hack in main.c

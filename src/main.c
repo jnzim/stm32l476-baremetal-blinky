@@ -46,25 +46,28 @@ void SysTick_Handler(void)
 {
     tick_ms++;
     drive_update();   // state machine — runs every tick
-    TrajSample s;
-    if (ring_pop(&s)) 
+
+    if (drive_get_state() == STATE_ENABLED)  // ← add this guard
     {
 
+        TrajSample s;
+        if (ring_pop(&s)) 
+        {
+
         
-        telem_buf[1].pos_cmd          = s.pos_cmd;
-        telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
-        telem_buf[1].timestamp_ms     = tick_ms;
-        telem_buf[1].samples_consumed = ++samples_consumed;
+            telem_buf[1].pos_cmd          = s.pos_cmd;
+            telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
+            telem_buf[1].timestamp_ms     = tick_ms;
+            telem_buf[1].samples_consumed = ++samples_consumed;
 
+            telem_buf[1].pos_fbk = plant.pos_counts;
+            telem_buf[1].vel_fbk = (int16_t)plant.vel_counts;   
 
-        telem_buf[1].pos_fbk = plant.pos_counts;
-        telem_buf[1].vel_fbk = (int16_t)plant.vel_counts;
-
-        float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-        vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
+            float pos_err = (float)(s.pos_cmd - plant.pos_counts);
+            vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
                                         + (float)s.vel_cmd / COUNTS_PER_RAD;
-    }
-
+        }
+    }  
     debug_ring_count = ring.count;
 
     // PC13 READY — active low, Pi refills when asserted
@@ -88,7 +91,8 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
 
     // velocity loop — 5 kHz (÷4)
-    if (++vel_div >= 4) {
+    if (++vel_div >= 4) 
+    {
         vel_div = 0;
         float v_err = vel_cmd - plant.vel;
         iq_cmd = pi_step(&velocity_loop, v_err, DT_VELOCITY);
