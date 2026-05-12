@@ -67,6 +67,11 @@ Companion trajectory streamer: [servo-trajectory-streamer](https://github.com/jn
 - Real PWM output: not yet
 - Motor spin: not yet
 
+
+## Simulation Results
+
+![Position and velocity tracking](docs/plots/sim_position_velocity_tracking.png)
+
 ## Project goal
 
 Demonstrate full-stack servo drive competency — trajectory generation, SPI comms, bare metal STM32, and closed-loop FOC from scratch. Target applications: semiconductor capital equipment (KLA, ASML, Aerotech, Lam Research).
