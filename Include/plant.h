@@ -8,7 +8,7 @@
 #define PLANT_L         0.0018f
 #define PLANT_KT        0.072f
 #define PLANT_J         3.2e-6f
-#define PLANT_B         1.0e-6f
+#define PLANT_B         0.001f   // was 1e-6, increase 1000x
 
 typedef struct {
     float   vel;        // rad/s

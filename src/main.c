@@ -46,7 +46,14 @@ void SysTick_Handler(void)
     tick_ms++;
 
     TrajSample s;
-    if (ring_pop(&s)) {
+    if (ring_pop(&s)) 
+    {
+         if (!sim_active) 
+         {
+            sim_active = 1;
+            plant_init(&plant);
+        }
+        
         telem_buf[1].pos_cmd          = s.pos_cmd;
         telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
         telem_buf[1].timestamp_ms     = tick_ms;
@@ -79,27 +86,12 @@ void SysTick_Handler(void)
 // ─────────────────────────────────────────────────────────────────────────────
 void TIM1_UP_TIM10_IRQHandler(void)
 {
-    TIM1->SR = 0;   // clear update interrupt flag
-    if (!sim_active) return;  
-    // current loop — 20 kHz
-    // error = commanded current - simulated current
-    // output = voltage applied to motor (v_q)
-    float i_err = iq_cmd - plant.i_q;
-    v_q_cmd = pi_step(&current_loop, i_err, DT_CURRENT);
+   TIM1->SR = 0;
+    if (!sim_active) return;
 
-    // step plant with new voltage command — updates vel, pos, i_q
+    // direct drive — bypass current and velocity loops
+    v_q_cmd = vel_cmd * 0.002f;
     plant_step(&plant, v_q_cmd, DT_CURRENT);
-
-    // velocity loop — 5 kHz (÷4)
-    // error = commanded velocity - simulated velocity
-    // output = current setpoint (iq_cmd)
-    if (++vel_div >= 4) {
-        vel_div = 0;
-
-        // velocity loop — compare in counts/sec
-        float v_err = (float)vel_cmd - (float)plant.vel_counts;
-        iq_cmd = pi_step(&velocity_loop, v_err, DT_VELOCITY);
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,9 +146,11 @@ int main(void)
     // ── Plant and controller init ─────────────────────────────────────────────
     // Gains are placeholder — tune after sim validation with matplotlib.
     plant_init(&plant);
-pi_init(&current_loop,  5.0f,   0.0f,  -24.0f, 24.0f);  // Ki=0
-pi_init(&velocity_loop, 0.005f, 0.0f,   -3.0f,  3.0f);  // Ki=0
+
+    pi_init(&current_loop,  1.0f,  0.0f,  -24.0f, 24.0f);
+pi_init(&velocity_loop, 0.003f, 0.0f,  -2.0f,  2.0f);
 p_init(&position_loop,  1.0f);
+
 
     // ── Peripheral init ───────────────────────────────────────────────────────
     spi_init();

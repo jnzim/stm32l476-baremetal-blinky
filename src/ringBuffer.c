@@ -17,15 +17,15 @@ void ring_reset(void) {
 
 void ring_push(const TrajSample* s)
 {
-    if (ring.count >= RING_BUFFER_SIZE) { return ; } // overflow
+    if (ring.count >= RING_BUFFER_SIZE) { return ; } // overflow TODO: disable, errror
 
-    ring.buf[ring.write_idx] = *s;
-    ring.write_idx = (ring.write_idx + 1) % RING_BUFFER_SIZE;
+    ring.buf[ring.write_idx]    = *s;
+    ring.write_idx              = (ring.write_idx + 1) % RING_BUFFER_SIZE;
     ring.count++;
 }
 int ring_pop(TrajSample* s)   // returns 1 if sample available, 0 if empty
 {
-    if (ring.count < 1) { return 0; } // overflow
+    if (ring.count < 1) { return 0; } // verflow TODO: disable, errror
    
     *s = ring.buf[ring.read_idx];
     ring.read_idx = (ring.read_idx + 1) % RING_BUFFER_SIZE;

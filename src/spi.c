@@ -150,7 +150,7 @@ void DMA1_Stream3_IRQHandler(void)
             ring_reset();
             samples_consumed = 0;
             telem_buf[1].samples_consumed = 0;
-            sim_active = 1;
+
             break;
         case SPI2_OP_READY_ACK:
             break;
