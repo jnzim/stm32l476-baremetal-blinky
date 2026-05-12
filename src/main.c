@@ -64,7 +64,8 @@ void SysTick_Handler(void)
         telem_buf[1].vel_fbk = (int16_t)plant.vel_counts;
 
         float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-        vel_cmd = p_step(&position_loop, pos_err);
+        //vel_cmd = p_step(&position_loop, pos_err);
+        vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;
     }
 
     debug_ring_count = ring.count;
@@ -86,12 +87,23 @@ void SysTick_Handler(void)
 // ─────────────────────────────────────────────────────────────────────────────
 void TIM1_UP_TIM10_IRQHandler(void)
 {
-   TIM1->SR = 0;
+TIM1->SR = 0;
     if (!sim_active) return;
 
-    // direct drive — bypass current and velocity loops
-    v_q_cmd = vel_cmd * 0.002f;
+    // velocity loop — 5 kHz (÷4)
+    if (++vel_div >= 4) {
+        vel_div = 0;
+        float v_err = vel_cmd - plant.vel;
+        iq_cmd = pi_step(&velocity_loop, v_err, DT_VELOCITY);
+
+        
+    }
+
+    // direct current → voltage, no current loop yet
+    v_q_cmd = iq_cmd * PLANT_R;
+
     plant_step(&plant, v_q_cmd, DT_CURRENT);
+  
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,9 +158,7 @@ int main(void)
     // ── Plant and controller init ─────────────────────────────────────────────
     // Gains are placeholder — tune after sim validation with matplotlib.
     plant_init(&plant);
-
-    pi_init(&current_loop,  1.0f,  0.0f,  -24.0f, 24.0f);
-pi_init(&velocity_loop, 0.003f, 0.0f,  -2.0f,  2.0f);
+pi_init(&velocity_loop, 0.1f, 0.0f, -5.0f, 5.0f);
 p_init(&position_loop,  1.0f);
 
 
