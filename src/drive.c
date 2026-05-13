@@ -12,6 +12,7 @@
 
 #include "drive.h"
 #include "spi.h"
+#include "loops.h"
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static DriveState state      = STATE_IDLE;
@@ -112,14 +113,9 @@ void drive_update(void)
             state = STATE_ENABLED;
             break;
 
-        case STATE_ENABLED:
-            if (entry) 
-            {
-                // first tick in ENABLED — one-time init
-                // plant_init() or integrator reset goes here
-                // replaces the sim_active hack in main.c
-            }
-            // normal operation — loops run in TIM1 and SysTick
+            case STATE_ENABLED:
+            if (entry)
+                loops_reset();
             break;
 
         case STATE_FAULT:

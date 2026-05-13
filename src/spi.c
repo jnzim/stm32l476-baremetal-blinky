@@ -18,6 +18,7 @@
 #include "stm32f4xx.h"
 #include <string.h>
 #include "drive.h"
+#include "loops.h"
 
 // ── Opcodes — use protocol.h constants, no local redefinition ────────────────
 // SPI2_OP_BLOCK_HDR 0x03, SPI2_OP_DATA 0x04, SPI2_OP_READY_ACK 0x05, SPI2_OP_TELEM_REQ 0x06
@@ -38,8 +39,7 @@ static volatile uint8_t spi2_rx_buf[SPI2_PKT_LEN];
 volatile uint32_t cnt_data          = 0;
 volatile uint32_t cnt_telem         = 0;
 volatile uint32_t cnt_error         = 0;
-// ── Reset after each move  ──────────────────────────────────
-volatile uint32_t samples_consumed  = 0;
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_init

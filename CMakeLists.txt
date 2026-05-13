@@ -16,6 +16,7 @@ add_executable(fw.elf
     src/plant.c
     src/control.c
     src/drive.c
+    src//loops.c
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )
