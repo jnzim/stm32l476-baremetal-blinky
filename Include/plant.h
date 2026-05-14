@@ -5,11 +5,13 @@
 #include "protocol.h"
 
 
-#define PLANT_R         3.25f
-#define PLANT_L         0.0018f
-#define PLANT_KT        0.072f
-#define PLANT_J         3.2e-6f
+#define PLANT_R         3.9f
+#define PLANT_L         0.00268f
+#define PLANT_KT        0.1125f
+#define PLANT_J         1.7e-6f
 #define PLANT_B         0.0001f
+
+
 
 typedef struct {
     float   vel;        // rad/s

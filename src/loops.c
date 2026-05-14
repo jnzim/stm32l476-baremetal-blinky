@@ -1,5 +1,9 @@
+// loops.c — controller state and reset
 #include "loops.h"
 #include "control.h"
+#include "plant.h"
+
+extern PlantState plant;
 
 // ── Reset after each move  ──────────────────────────────────
 volatile uint32_t samples_consumed = 0;
@@ -28,17 +32,17 @@ volatile uint8_t first_sample_ready = 0;
 // ─────────────────────────────────────────────────────────────────────────────
 void loops_reset(void)
 {
-    pi_init(&current_loop,  3.0f, 0.0f, -24.0f, 24.0f);
-    pi_init(&velocity_loop, 0.1f, 0.0f,  -5.0f,  5.0f);
-    p_init(&position_loop, 10.0f);
+    pi_init(&current_loop,  0.1f,  0.0f, -24.0f, 24.0f);
+    pi_init(&velocity_loop, 0.01f, 0.0f,  -5.0f,  5.0f);
+    p_init(&position_loop,  1.0f);
 
     vel_cmd  = 0.0f;
     iq_cmd   = 0.0f;
     v_q_cmd  = 0.0f;
     vel_div  = 0;
 
-    samples_consumed    = 0;
-    first_sample_ready  = 0;
+    samples_consumed   = 0;
+    first_sample_ready = 0;
 
     plant_init(&plant);
 }
