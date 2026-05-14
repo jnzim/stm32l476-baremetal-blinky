@@ -3,6 +3,7 @@
 #include "control.h"
 #include "plant.h"
 #include "spi.h"
+#include <string.h>
 
 extern PlantState plant;
 
