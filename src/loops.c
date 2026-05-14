@@ -2,6 +2,7 @@
 #include "loops.h"
 #include "control.h"
 #include "plant.h"
+#include "spi.h"
 
 extern PlantState plant;
 
@@ -32,6 +33,7 @@ volatile uint8_t first_sample_ready = 0;
 // ─────────────────────────────────────────────────────────────────────────────
 void loops_reset(void)
 {
+    memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
     pi_init(&current_loop,  0.1f,  0.0f, -24.0f, 24.0f);
     pi_init(&velocity_loop, 0.01f, 0.0f,  -5.0f,  5.0f);
     p_init(&position_loop,  1.0f);
