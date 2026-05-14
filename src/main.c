@@ -19,7 +19,7 @@
 #define DT_POSITION     (1.0f / 1000.0f)
 
 // ── Sim mode plant ────────────────────────────────────────────────────────────
-static PlantState plant;            // plant stays in main — not a loop variable
+PlantState plant;            // plant stays in main — not a loop variable
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 volatile uint32_t debug_ring_count = 0;

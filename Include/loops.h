@@ -1,10 +1,13 @@
 #pragma once
 #include "control.h"
+#include "plant.h"
 
 // ── Controller state ──────────────────────────────────────────────────────────
 extern PIState current_loop;
 extern PIState velocity_loop;
 extern PState  position_loop;
+
+extern PlantState plant;
 
 // ── Inter-loop setpoints ──────────────────────────────────────────────────────
 extern float    vel_cmd;
