@@ -2,12 +2,25 @@
 
 ## Overview
 
-This is a single-axis BLDC servo drive running on an STM32F411 Nucleo. The Raspberry Pi 5
+This is a single-axis BLDC servo drive running on an STM32F446RE Nucleo. The Raspberry Pi 5
 generates a trajectory and streams it over SPI. The STM32 closes three nested control loops
 in real time and streams telemetry back to the Pi.
 
 There is no traditional main loop. After startup, `main()` sleeps forever in `while(1){}`.
 All work happens in three interrupt handlers firing on independent schedules.
+
+---
+
+## Hardware Wiring
+
+| Pi 5 Pin | Pi 5 Signal  | Wire Color | STM32 Pin | STM32 Function     |
+|----------|--------------|------------|-----------|--------------------|
+| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | SPI2 MOSI          |
+| Pin 20   | GND          | Black      | CN7 Pin 20| GND                |
+| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | SPI2 MISO          |
+| Pin 22   | GPIO 25      | Green      | PC13      | READY (active low) |
+| Pin 23   | GPIO 11 SCK  | Red        | PB13      | SPI2 SCK           |
+| Pin 24   | GPIO 8 CE0   | Brown      | PB12      | SPI2 NSS           |
 
 ---
 
@@ -100,6 +113,16 @@ command 20x per ms, rejecting disturbances faster than the trajectory can see th
 
 ---
 
+## Interrupt Priorities
+
+| IRQ                  | Priority | Rate   | Role                        |
+|----------------------|----------|--------|-----------------------------|
+| TIM1_UP_TIM10_IRQn   | 0        | 20 kHz | Current + velocity loops    |
+| SysTick              | —        | 1 kHz  | Position loop, state machine|
+| DMA1_Stream3_IRQn    | 2        | per pkt| SPI RX decode, ring fill    |
+
+---
+
 ## State Machine — `drive.c`
 
 The state machine is the only place state transitions happen. ISRs set flags; SysTick
@@ -150,6 +173,18 @@ TrapGenerator → profile[]
 The ring buffer decouples SPI transfers (bursty, DMA-driven) from sample consumption
 (steady, 1 per SysTick tick). PC13 READY signals the Pi to refill when the buffer
 drops below half.
+
+---
+
+## SPI Protocol
+
+- **Packet size:** 24 bytes every transaction, full duplex
+- **CS:** toggles once per packet (Pi kernel SPI driver, spidev)
+- **STM mode:** SPI2 slave, Mode 0, 8-bit, SSM=1 SSI=1 (software NSS)
+- **DMA RX:** DMA1 Stream3 Ch0, circular, fires TCIF every 24 bytes
+- **DMA TX:** DMA1 Stream4 Ch0, circular, replays telem_buf[1] continuously
+- **Known issue:** DMA circular buffer can misalign on first packet if counter
+  is mid-revolution when streaming starts — intermittent, under investigation
 
 ---
 
