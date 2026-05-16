@@ -1,5 +1,4 @@
 #include "stm32f4xx.h"
-#include "clock.h"
 #include "spi.h"
 #include "encoder.h"
 #include "ringBuffer.h"
@@ -7,7 +6,7 @@
 #include "control.h"
 #include "protocol.h"
 #include "drive.h"
-#include "loops.h"
+#include "loops.h"                  // ← add
 
 // ── READY signal — PC13, active low → Pi refills ring buffer ─────────────────
 #define READY_PIN       13u
@@ -20,13 +19,12 @@
 #define DT_POSITION     (1.0f / 1000.0f)
 
 // ── Sim mode plant ────────────────────────────────────────────────────────────
-PlantState plant;
+static PlantState plant;            // plant stays in main — not a loop variable
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 volatile uint32_t debug_ring_count = 0;
 volatile uint32_t tick_ms          = 0;
 
-// ─────────────────────────────────────────────────────────────────────────────
 void SysTick_Handler(void)
 {
     tick_ms++;
@@ -35,12 +33,13 @@ void SysTick_Handler(void)
     if (drive_get_state() == STATE_ENABLED)
     {
         if (drive_is_entry())
-            first_sample_ready = 0;
+            first_sample_ready = 0;     // guard — loops_reset() handles the rest
 
         TrajSample s;
         if (ring_pop(&s))
         {
             first_sample_ready = 1;
+
             telem_buf[1].pos_cmd          = s.pos_cmd;
             telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
             telem_buf[1].timestamp_ms     = tick_ms;
@@ -55,16 +54,17 @@ void SysTick_Handler(void)
     }
 
     debug_ring_count = ring.count;
+
     if (ring.count <= 2048)
         GPIOC->BSRR = READY_CLR_LOW;
     else
         GPIOC->BSRR = READY_SET_HIGH;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = 0;
+
     if (drive_get_state() != STATE_ENABLED) return;
     if (!first_sample_ready) return;
 
@@ -80,7 +80,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
     plant_step(&plant, v_q_cmd, DT_CURRENT);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 static void tim1_init(void)
 {
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
@@ -88,21 +87,19 @@ static void tim1_init(void)
 
     TIM1->CR1  = TIM_CR1_CMS_0;
     TIM1->PSC  = 0;
-    TIM1->ARR  = 4499;           // 180MHz / 4500 = 20kHz (center-aligned counts twice)
+    TIM1->ARR  = 4499;
     TIM1->DIER = TIM_DIER_UIE;
     TIM1->EGR  = TIM_EGR_UG;
     TIM1->SR   = 0;
 
     NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
+
     TIM1->CR1 |= TIM_CR1_CEN;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 int main(void)
 {
-    clock_init();   // ── must be first — configure PLL to 180MHz ──────────────
-
     telem_buf[1].pos_cmd      = 0x12345678;
     telem_buf[1].pos_fbk      = 0x87654321;
     telem_buf[1].timestamp_ms = 0xDEADBEEF;
@@ -111,20 +108,21 @@ int main(void)
 
     RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
     (void)RCC->AHB1ENR;
+
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
     (void)RCC->AHB1ENR;
-
     GPIOC->MODER  &= ~(3u << (READY_PIN * 2));
     GPIOC->MODER  |=  (1u << (READY_PIN * 2));
     GPIOC->OTYPER &= ~(1u << READY_PIN);
     GPIOC->BSRR    =  READY_SET_HIGH;
 
-    plant_init(&plant);
+    plant_init(&plant);             // plant init stays here
+    // controller inits removed — loops_reset() handles them on STATE_ENABLED entry
 
     spi_init();
     encoder_init();
     tim1_init();
-    SysTick_Config(180000);     // 180MHz / 180000 = 1kHz
+    SysTick_Config(180000);
 
     while (1) {}
 }
