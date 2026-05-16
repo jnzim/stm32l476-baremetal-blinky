@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
+set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/toolchain.cmake" CACHE PATH "" FORCE)
 project(blinky LANGUAGES C ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -7,6 +8,7 @@ set(MCU cortex-m4)
 set(FPU cortex-m4)
 set(LDSCRIPT ${CMAKE_SOURCE_DIR}/linker/memory.ld)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 
 add_executable(fw.elf
     src/main.c
