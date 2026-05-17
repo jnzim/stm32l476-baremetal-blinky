@@ -8,7 +8,7 @@
 #include "drive.h"
 #include "loops.h"
 
-// ── READY signal — PC13, active low → Pi refills ring buffer ─────────────────
+// ── READY signal — PC13, active high → Pi refills ring buffer ────────────────
 #define READY_PIN       13u
 #define READY_SET_HIGH  (1u << READY_PIN)
 #define READY_CLR_LOW   (1u << (READY_PIN + 16u))
@@ -19,7 +19,7 @@
 #define DT_POSITION     (1.0f / 1000.0f)
 
 // ── Sim mode plant ────────────────────────────────────────────────────────────
- PlantState plant;
+PlantState plant;
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 volatile uint32_t debug_ring_count = 0;
@@ -36,35 +36,35 @@ void SysTick_Handler(void)
             first_sample_ready = 0;
 
         TrajSample s;
+
+        // ── Full control loop (restore after echo test passes) ────────────────
         /*
         if (ring_pop(&s))
         {
-            first_sample_ready = 1;
+            first_sample_ready            = 1;
             telem_buf[1].pos_cmd          = s.pos_cmd;
             telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
             telem_buf[1].timestamp_ms     = tick_ms;
             telem_buf[1].samples_consumed = ++samples_consumed;
             telem_buf[1].pos_fbk          = plant.pos_counts;
             telem_buf[1].vel_fbk          = (int16_t)plant.vel_counts;
-
             float pos_err = (float)(s.pos_cmd - plant.pos_counts);
             vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
                     + (float)s.vel_cmd / COUNTS_PER_RAD;
         }
-*/
-        
+        */
+
+        // ── Echo test — pos_fbk/vel_fbk mirrors ring data ────────────────────
         if (ring_pop(&s))
         {
-            first_sample_ready = 1;
+            first_sample_ready            = 1;
             telem_buf[1].pos_cmd          = s.pos_cmd;
             telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
             telem_buf[1].timestamp_ms     = tick_ms;
             telem_buf[1].samples_consumed = ++samples_consumed;
-            telem_buf[1].pos_fbk          = s.pos_cmd;  // echo back
-            telem_buf[1].vel_fbk          = (int16_t)s.vel_cmd;  // echo back
+            telem_buf[1].pos_fbk          = s.pos_cmd;
+            telem_buf[1].vel_fbk          = (int16_t)s.vel_cmd;
         }
-
-
     }
 
     debug_ring_count = ring.count;
@@ -90,7 +90,7 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
     float i_err = iq_cmd - plant.i_q;
     v_q_cmd = pi_step(&current_loop, i_err, DT_CURRENT);
-    //plant_step(&plant, v_q_cmd, DT_CURRENT);
+    plant_step(&plant, v_q_cmd, DT_CURRENT);
 }
 
 static void tim1_init(void)
