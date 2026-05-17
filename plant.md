@@ -1,92 +1,67 @@
-# Plant Model
+# Plant Model — AKM11E Servo Axis
 
-This document derives the simplified plant model for the STM32-based servo axis.
+Derives the simplified plant model for the STM32-based servo axis.
 
-The goal is to model the physical path:
+**Signal chain:**
+```
+Voltage / PWM → motor current → torque → angular velocity → angular position → linear position
+```
 
-Voltage / PWM command → motor current → motor torque → angular velocity → angular position → linear position
-
-The model is intended for controller design, simulation, tuning intuition, and future system identification.
+Intended for controller design, simulation, tuning intuition, and future system identification.
 
 ---
 
 ## 1. Physical System
 
-The axis consists of:
-
 - Kollmorgen AKM11E-ANCN2-00 servo motor
 - Ball screw / leadscrew linear actuator
 - Linear bearing guided carriage
-- Encoder feedback
-- STM32 real-time control loop
-- PWM power stage
+- Incremental quadrature encoder (N2 option, 2048 CPR → 8192 counts/rev after 4x decode)
+- STM32F446RE real-time control loop (bare metal, no HAL)
+- PWM power stage (DRV8353RS-EVM)
 
-The mechanical load is modeled as a reflected rotary inertia at the motor shaft.
+Mechanical load modeled as reflected rotary inertia at the motor shaft.
 
 ---
 
 ## 2. Motor Parameters
 
-Known AKM11E motor parameters:
-
 | Parameter | Symbol | Value |
-|---|---:|---:|
+|---|---|---|
 | Torque constant | `kt` | 0.1125 Nm/A |
-| Back EMF constant | `ke` | 7.24 V/krpm |
-| Resistance | `R` | 3.9 ohm |
-| Inductance | `L` | 2.68 mH |
-| Rotor inertia | `Jm` | 0.017 kg-cm^2 |
+| Back EMF constant | `ke` | 7.24 V/krpm → **0.0691 V·s/rad** |
+| Winding resistance | `R` | 3.9 Ω |
+| Winding inductance | `L` | 2.68 mH → **0.00268 H** |
+| Rotor inertia | `Jm` | 0.017 kg·cm² → **1.7×10⁻⁶ kg·m²** |
 
-Convert units:
-
-```text
-L  = 0.00268 H
-Jm = 0.017 kg-cm^2 = 1.7e-6 kg-m^2
+**Back EMF conversion:**
 ```
-
-Back EMF conversion:
-
-```text
-1 krpm = 1000 rev/min = 104.72 rad/sec
-
-ke = 7.24 / 104.72
-ke = 0.0691 V-sec/rad
+1 krpm = 1000 rev/min = 104.72 rad/s
+ke = 7.24 / 104.72 = 0.0691 V·s/rad
 ```
 
 ---
 
 ## 3. Electrical Model
 
-The motor electrical equation is:
-
-```text
-V = L * di/dt + R*i + ke*Omega
+Motor electrical equation:
+```
+V = L·(di/dt) + R·i + ke·Ω
 ```
 
-Taking the Laplace transform:
-
-```text
-V(s) = (L*s + R)I(s) + ke*Omega(s)
+Laplace transform:
+```
+V(s) = (L·s + R)·I(s) + ke·Ω(s)
 ```
 
-Electrical pole:
-
-```text
-s = -R/L
+**Electrical pole:**
+```
+s = -R/L = -3.9 / 0.00268 = -1455 rad/s
 ```
 
-Using motor values:
-
-```text
-s = -3.9 / 0.00268
-s = -1455 rad/sec
+**Electrical time constant:**
 ```
-
-Electrical time constant:
-
-```text
-tau_e = L/R
-tau_e = 0.687 ms
+τe = L/R = 0.687 ms
 ```
 
 ---
@@ -94,282 +69,168 @@ tau_e = 0.687 ms
 ## 4. Mechanical Model
 
 Motor torque:
-
-```text
-T = kt*i
+```
+T = kt·i
 ```
 
-Mechanical equation:
-
-```text
-kt*i - B*Omega = Jeq * dOmega/dt
+Mechanical equation (Newton-Euler):
+```
+kt·i - B·Ω = Jeq·(dΩ/dt)
 ```
 
 Laplace transform:
-
-```text
-kt*I(s) - B*Omega(s) = Jeq*s*Omega(s)
 ```
-
-Rearrange:
-
-```text
-I(s) = ((Jeq*s + B) / kt) * Omega(s)
+kt·I(s) - B·Ω(s) = Jeq·s·Ω(s)
 ```
 
 ---
 
 ## 5. Equivalent Inertia
 
-```text
+```
 Jeq = Jm + Jscrew + Jload
 ```
 
-Leadscrew relationship:
-
-```text
-x = (p / 2*pi) * theta
+For a leadscrew with pitch `p` (m/rev) and carriage mass `M`:
+```
+Jload = M · (p / 2π)²
+Jeq   = Jm + Jscrew + M·(p / 2π)²
 ```
 
-Reflected load inertia:
-
-```text
-Jload = M * (p / 2*pi)^2
-```
-
-So:
-
-```text
-Jeq = Jm + Jscrew + M*(p / 2*pi)^2
-```
-
-Known:
-
-```text
-Jm = 1.7e-6 kg-m^2
-```
+> **Note:** Jscrew and load mass not yet characterized. `Jeq = Jm = 1.7×10⁻⁶ kg·m²` used for simulation — will be updated after system identification.
 
 ---
 
 ## 6. Voltage-to-Velocity Transfer Function
 
-Start with:
+Substituting electrical and mechanical equations:
 
-```text
-V(s) = (L*s + R)I(s) + ke*Omega(s)
 ```
-
-Substitute:
-
-```text
-I(s) = ((Jeq*s + B) / kt) * Omega(s)
-```
-
-Then:
-
-```text
-Omega(s) / V(s)
-=
-kt / [ (L*s + R)(Jeq*s + B) + ke*kt ]
+Ω(s) / V(s) = kt / [ (L·s + R)(Jeq·s + B) + ke·kt ]
 ```
 
 ---
 
 ## 7. Voltage-to-Linear-Position Transfer Function
 
-```text
-x = (p / 2*pi) * theta
+Linear position from angular:
+```
+x = (p / 2π) · θ
+Ω(s) = s·Θ(s)
+X(s) = (p / 2π) · Ω(s) / s
 ```
 
-```text
-Omega(s) = s*Theta(s)
+**Full plant transfer function:**
 ```
-
-Therefore:
-
-```text
-X(s) = (p / 2*pi) * Omega(s) / s
-```
-
-Final plant:
-
-```text
 Gp(s) = X(s) / V(s)
 
-Gp(s) =
-(p / 2*pi) * kt
-/
-s[ (L*s + R)(Jeq*s + B) + ke*kt ]
+       (p / 2π) · kt
+     = ─────────────────────────────────────────────
+       s · [ (L·s + R)(Jeq·s + B) + ke·kt ]
 ```
 
 ---
 
-## 8. Substitute Known Motor Values
+## 8. Numerical Substitution
 
-Known:
-
-```text
-kt = 0.1125
-ke = 0.0691
-R  = 3.9
-L  = 0.00268
-Jm = 1.7e-6
+Known values:
+```
+kt  = 0.1125
+ke  = 0.0691
+R   = 3.9
+L   = 0.00268
+Jm  = 1.7e-6
+ke·kt = 0.00777
 ```
 
-So:
-
-```text
-Gp(s) =
-(p / 2*pi) * 0.1125
-/
-s[ (0.00268*s + 3.9)(Jeq*s + B) + (0.0691)(0.1125) ]
 ```
-
-Calculate:
-
-```text
-ke*kt = 0.00777
-```
-
-So:
-
-```text
-Gp(s) =
-(p / 2*pi) * 0.1125
-/
-s[ (0.00268*s + 3.9)(Jeq*s + B) + 0.00777 ]
+Gp(s) = (p / 2π) · 0.1125
+        / s · [ (0.00268·s + 3.9)(Jeq·s + B) + 0.00777 ]
 ```
 
 ---
 
 ## 9. Expanded Denominator
 
-Expand:
-
-```text
-(L*s + R)(Jeq*s + B)
-=
-L*Jeq*s^2 + (L*B + R*Jeq)s + R*B
+```
+(L·s + R)(Jeq·s + B) = L·Jeq·s² + (L·B + R·Jeq)·s + R·B
 ```
 
-Multiply by the outer integrator:
-
-```text
-D(s) =
-L*Jeq*s^3
-+
-(L*B + R*Jeq)s^2
-+
-(R*B + ke*kt)s
+Full denominator (with outer integrator):
+```
+D(s) = L·Jeq·s³ + (L·B + R·Jeq)·s² + (R·B + ke·kt)·s
 ```
 
-So:
-
-```text
-Gp(s) =
-(p / 2*pi) * kt
-/
-[
-L*Jeq*s^3
-+
-(L*B + R*Jeq)s^2
-+
-(R*B + ke*kt)s
-]
-```
-
-This is a third-order plant:
-1. electrical pole
-2. mechanical pole
-3. position integrator
+**This is a third-order plant:**
+1. Electrical pole — fastest
+2. Mechanical pole — dominant
+3. Position integrator
 
 ---
 
-## 10. Pole Intuition
+## 10. Pole Separation
 
-Electrical pole:
-
-```text
-s = -R/L
-s = -1455 rad/sec
+```
+Electrical pole:   s = -R/L   = -1455 rad/s   (fast)
+Mechanical pole:   s = -B/Jeq              (slow, load dependent)
 ```
 
-Mechanical pole:
+`R/L >> B/Jeq` in most cases — electrical dynamics are fast, mechanical dynamics dominate.
 
-```text
-s = -B/Jeq
-```
-
-Usually:
-
-```text
-R/L >> B/Jeq
-```
-
-So:
-- electrical dynamics are fast
-- mechanical dynamics are slower and dominant
-
-This is why nested servo loops work well:
-- current loop -> fastest
-- velocity loop -> medium
-- position loop -> slowest
+This pole separation is why nested loop architecture works:
+- **Current loop** — closes around electrical pole, fastest (~20 kHz)
+- **Velocity loop** — closes around mechanical pole, medium (~5 kHz)
+- **Position loop** — outermost, slowest (~1 kHz)
 
 ---
 
 ## 11. Simplified Current-Controlled Plant
 
-If the current loop is closed and much faster than the velocity loop:
+When the current loop bandwidth >> velocity loop bandwidth, the electrical dynamics are hidden inside the current loop. The plant seen by the velocity loop simplifies to:
 
-```text
-Omega(s) / I(s)
-=
-kt / (Jeq*s + B)
+```
+Ω(s) / I(s) = kt / (Jeq·s + B)
 ```
 
 For linear position:
-
-```text
-X(s) / I(s)
-=
-(p / 2*pi) * kt
-/
-[ s(Jeq*s + B) ]
+```
+X(s) / I(s) = (p / 2π) · kt / [ s·(Jeq·s + B) ]
 ```
 
-If damping is very small:
-
-```text
-B ≈ 0
+With low damping (`B ≈ 0`):
+```
+X(s) / I(s) ≈ (p / 2π) · kt / (Jeq·s²)
 ```
 
-then:
-
-```text
-X(s) / I(s)
-≈
-(p / 2*pi) * kt
-/
-(Jeq*s^2)
-```
-
-This approximates a double integrator.
+**Double integrator** — standard result for a current-controlled servo with negligible friction.
 
 ---
 
-## 12. Future Model Improvements
+## 12. Simulation Implementation
 
-Potential future additions:
+Two plant models implemented in firmware:
 
-- Coulomb friction
-- static friction / stiction
-- screw compliance
-- coupler compliance
-- backlash
-- resonance
-- encoder quantization
-- PWM delay
-- ADC delay
-- discrete-time effects
-- current-loop dynamics
-- system identification
+| File | Model | Use |
+|---|---|---|
+| `plant.c` | Mechanical only — no L/R lag, instantaneous current | Fast simulation, initial tuning |
+| `plant_em.c` | Full electromechanical — L/R lag + back EMF | Accurate 2nd order behavior, current loop validation |
+
+**`plant_em.c` state equations (discrete Euler, dt = 50µs):**
+```
+di/dt  = (v_q - R·i - ke·ω) / L       — electrical
+dω/dt  = (kt·i - B·ω) / Jeq           — mechanical
+dθ/dt  = ω                             — position integrator
+```
+
+---
+
+## 13. Future Model Improvements
+
+- Coulomb friction and stiction
+- Screw and coupler compliance
+- Backlash
+- Structural resonance
+- Encoder quantization noise
+- PWM and ADC delay modeling
+- Discrete-time ZOH effects
+- System identification (sysid) to validate Jeq and B
