@@ -7,6 +7,7 @@
 #include "protocol.h"
 #include "drive.h"
 #include "loops.h"
+#include "clock.h"
 
 // ── READY signal — PC13, active high → Pi refills ring buffer ────────────────
 #define READY_PIN       13u
@@ -106,6 +107,9 @@ static void tim1_init(void)
 
 int main(void)
 {
+    
+    clock_init();   
+
     telem_buf[1].pos_cmd      = 0x12345678;
     telem_buf[1].pos_fbk      = 0x87654321;
     telem_buf[1].timestamp_ms = 0xDEADBEEF;
