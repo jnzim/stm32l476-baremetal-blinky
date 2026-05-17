@@ -14,6 +14,7 @@
 #include "spi.h"
 #include "loops.h"
 #include "plant.h"
+#include "ringBuffer.h"
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static DriveState state      = STATE_IDLE;
@@ -98,7 +99,8 @@ void drive_update(void)
 
     case STATE_IDLE:
         // waiting for BLOCK_HDR from Pi — DMA ISR sets enable_req
-        if (enable_req) {
+        if (enable_req) 
+        {
             enable_req = 0;
             loops_reset();
             plant_init(&plant);
@@ -115,7 +117,12 @@ void drive_update(void)
         break;
 
     case STATE_ENABLED:
-        // normal operation — loops run in TIM1 and SysTick
+        if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
+        {
+            state      = STATE_IDLE;
+            entry_flag = 1;
+            first_sample_ready = 0;
+        }
         break;
 
     case STATE_FAULT:

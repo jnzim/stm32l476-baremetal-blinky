@@ -55,8 +55,10 @@ void SysTick_Handler(void)
             float pos_err = (float)(s.pos_cmd - plant.pos_counts);
             telem_buf[1].pos_err           = (int16_t)pos_err;
 
-            vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
-                    + (float)s.vel_cmd / COUNTS_PER_RAD;
+            //vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
+             //       + (float)s.vel_cmd / COUNTS_PER_RAD;
+
+             vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;
         }
 
     }
