@@ -20,6 +20,7 @@ add_executable(fw.elf
     src/drive.c
     src/loops.c
     src/clock.c
+    src/pwm.c
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )
