@@ -36,6 +36,7 @@ void SysTick_Handler(void)
             first_sample_ready = 0;
 
         TrajSample s;
+        /*
         if (ring_pop(&s))
         {
             first_sample_ready = 1;
@@ -50,6 +51,20 @@ void SysTick_Handler(void)
             vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
                     + (float)s.vel_cmd / COUNTS_PER_RAD;
         }
+*/
+        
+        if (ring_pop(&s))
+        {
+            first_sample_ready = 1;
+            telem_buf[1].pos_cmd          = s.pos_cmd;
+            telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
+            telem_buf[1].timestamp_ms     = tick_ms;
+            telem_buf[1].samples_consumed = ++samples_consumed;
+            telem_buf[1].pos_fbk          = s.pos_cmd;  // echo back
+            telem_buf[1].vel_fbk          = (int16_t)s.vel_cmd;  // echo back
+        }
+
+
     }
 
     debug_ring_count = ring.count;
@@ -75,7 +90,7 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
     float i_err = iq_cmd - plant.i_q;
     v_q_cmd = pi_step(&current_loop, i_err, DT_CURRENT);
-    plant_step(&plant, v_q_cmd, DT_CURRENT);
+    //plant_step(&plant, v_q_cmd, DT_CURRENT);
 }
 
 static void tim1_init(void)
