@@ -122,39 +122,44 @@ void spi_init(void)
 // ─────────────────────────────────────────────────────────────────────────────
 void DMA1_Stream3_IRQHandler(void)
 {
-    if (!(DMA1->LISR & DMA_LISR_TCIF3)) return;
+    if (!(DMA1->LISR & DMA_LISR_TCIF3)) return; // if not complete or errored, bail
 
     // Snapshot buffer before clearing — DMA is at byte 0 of next revolution
     uint8_t local[SPI2_PKT_LEN];
     memcpy(local, (void*)spi2_rx_buf, SPI2_PKT_LEN);
 
-    // Clear TC flag
+    // Clear transaction complete flag
     DMA1->LIFCR = DMA_LIFCR_CTCIF3;
 
-    // Decode from stable local copy
-    switch (local[0]) {
-        case SPI2_OP_DATA: {
+    // Decode local copy
+    switch (local[0]) 
+    {
+        case SPI2_OP_DATA: 
             uint8_t crc = 0;
             for (int i = 0; i < 9; i++) crc ^= local[i];
             if (crc != local[9]) { cnt_error++; break; }
+            // place in ring buf
             TrajSample s;
             memcpy(&s.pos_cmd, &local[1], sizeof(int32_t));
             memcpy(&s.vel_cmd,  &local[5], sizeof(int32_t));
             ring_push(&s);
+            
             cnt_data++;
             break;
-        }
+
         case SPI2_OP_TELEM_REQ:
             cnt_telem++;
             break;
-    case SPI2_OP_BLOCK_HDR:
-        first_sample_ready = 0;      // block TIM1 immediately
-        ring_reset();
-        samples_consumed = 0;
-        memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
-        telem_buf[1].samples_consumed = 0;
-        drive_request_enable();
-        break;
+
+        case SPI2_OP_BLOCK_HDR:
+            first_sample_ready = 0;      // block TIM1 immediately
+            ring_reset();
+            samples_consumed = 0;
+            memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
+            telem_buf[1].samples_consumed = 0;
+            drive_request_enable();
+            break;
+
         case SPI2_OP_READY_ACK:
             break;
 
