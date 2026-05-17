@@ -28,9 +28,9 @@ volatile uint8_t first_sample_ready = 0;
 // ─────────────────────────────────────────────────────────────────────────────
 void loops_reset(void)
 {
-pi_init(&current_loop,  0.0f, 0.0f, -24.0f, 24.0f);
-pi_init(&velocity_loop, 0.0f, 0.0f,  -5.0f,  5.0f);
-p_init(&position_loop,  0.0f);
+    pi_init(&current_loop,  1.0f, 0.0f, -12.0f, 12.0f);
+    pi_init(&velocity_loop, 0.05f, 0.0f, -2.0f,  2.0f);
+    p_init(&position_loop,  0.0f);
     vel_cmd             = 0.0f;
     iq_cmd              = 0.0f;
     v_q_cmd             = 0.0f;

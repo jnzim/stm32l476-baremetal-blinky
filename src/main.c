@@ -46,10 +46,10 @@ void SysTick_Handler(void)
             telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
             telem_buf[1].timestamp_ms     = tick_ms;
             telem_buf[1].samples_consumed = ++samples_consumed;
-            ///telem_buf[1].pos_fbk          = plant.pos_counts;
-            //telem_buf[1].vel_fbk          = (int16_t)plant.vel_counts;
-            telem_buf[1].vel_fbk = (int16_t)s.vel_cmd;  // echo ring vel
-            telem_buf[1].pos_fbk = s.pos_cmd;            // echo ring pos
+            telem_buf[1].pos_fbk          = plant.pos_counts;
+            telem_buf[1].vel_fbk          = (int16_t)plant.vel_counts;
+            //telem_buf[1].vel_fbk = (int16_t)s.vel_cmd;  // echo ring vel
+            //telem_buf[1].pos_fbk = s.pos_cmd;            // echo ring pos
             telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
             telem_buf[1].v_q_cmd          = v_q_cmd;
             float pos_err = (float)(s.pos_cmd - plant.pos_counts);
