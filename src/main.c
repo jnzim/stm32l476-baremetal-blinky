@@ -38,7 +38,7 @@ void SysTick_Handler(void)
         TrajSample s;
 
         // ── Full control loop (restore after echo test passes) ────────────────
-        /*
+        
         if (ring_pop(&s))
         {
             first_sample_ready            = 1;
@@ -52,8 +52,8 @@ void SysTick_Handler(void)
             vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD
                     + (float)s.vel_cmd / COUNTS_PER_RAD;
         }
-        */
-
+      
+/*
         // ── Echo test — pos_fbk/vel_fbk mirrors ring data ────────────────────
         if (ring_pop(&s))
         {
@@ -65,6 +65,7 @@ void SysTick_Handler(void)
             telem_buf[1].pos_fbk          = s.pos_cmd;
             telem_buf[1].vel_fbk          = (int16_t)s.vel_cmd;
         }
+              */
     }
 
     debug_ring_count = ring.count;
