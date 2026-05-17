@@ -1,5 +1,6 @@
 #include "loops.h"
 #include "control.h"
+#include "spi.h"
 
 // ── Reset after each move  ──────────────────────────────────
 volatile uint32_t samples_consumed = 0;
@@ -22,21 +23,16 @@ volatile uint8_t first_sample_ready = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // loops_reset — called from drive.c on STATE_ENABLED entry
-//
-// Resets all controller state, setpoints, and sequencing flags.
-// Ensures clean start before first trajectory sample is consumed.
 // ─────────────────────────────────────────────────────────────────────────────
 void loops_reset(void)
 {
     pi_init(&current_loop,  3.0f, 0.0f, -24.0f, 24.0f);
     pi_init(&velocity_loop, 0.1f, 0.0f,  -5.0f,  5.0f);
     p_init(&position_loop, 10.0f);
-
-    vel_cmd  = 0.0f;
-    iq_cmd   = 0.0f;
-    v_q_cmd  = 0.0f;
-    vel_div  = 0;
-
+    vel_cmd             = 0.0f;
+    iq_cmd              = 0.0f;
+    v_q_cmd             = 0.0f;
+    vel_div             = 0;
     samples_consumed    = 0;
     first_sample_ready  = 0;
 }

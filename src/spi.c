@@ -147,12 +147,14 @@ void DMA1_Stream3_IRQHandler(void)
         case SPI2_OP_TELEM_REQ:
             cnt_telem++;
             break;
-        case SPI2_OP_BLOCK_HDR:
-            ring_reset();
-            samples_consumed = 0;
-            telem_buf[1].samples_consumed = 0;
-            drive_request_enable();
-            break;
+    case SPI2_OP_BLOCK_HDR:
+        first_sample_ready = 0;      // block TIM1 immediately
+        ring_reset();
+        samples_consumed = 0;
+        memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
+        telem_buf[1].samples_consumed = 0;
+        drive_request_enable();
+        break;
         case SPI2_OP_READY_ACK:
             break;
 
