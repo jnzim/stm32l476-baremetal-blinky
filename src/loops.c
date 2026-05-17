@@ -39,3 +39,4 @@ void loops_reset(void)
     samples_consumed    = 0;
     first_sample_ready  = 0;
 }
+
