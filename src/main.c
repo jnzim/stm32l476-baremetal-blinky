@@ -90,18 +90,55 @@ void TIM1_UP_TIM10_IRQHandler(void)
     plant_step(&plant, v_q_cmd, DT_CURRENT);
 }
 
+// tim1_init — 3-phase complementary PWM + current/velocity loop interrupt
+//
+// TIM1 runs two jobs simultaneously:
+//   1. Generates 6 PWM signals (3 complementary pairs) for the DRV8353RS-EVM gate driver
+//      PA8/PA7  → Phase A high/low
+//      PA9/PB0  → Phase B high/low
+//      PA10/PB1 → Phase C high/low
+//
+//   2. Fires an update interrupt at 20kHz (center-aligned bottom) which runs:
+//      - Current loop  @ 20kHz (every ISR tick)
+//      - Velocity loop @ 5kHz  (every 4th ISR tick via vel_div)
+//
+// Center-aligned mode ensures ADC current sampling (triggered at peak) is
+// noise-free — switching transitions happen at peak/valley, not mid-sample.
+//
+// TIM1 clock: APB2=90MHz × 2 = 180MHz
+// ARR=4499, center-aligned → period = 2×4500 / 180MHz = 50µs = 20kHz
+// Dead time insertion added when PWM channels are enabled (not yet configured)
 static void tim1_init(void)
 {
+    // ── Clock ─────────────────────────────────────────────────────────────────
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
-    (void)RCC->APB2ENR;
-    TIM1->CR1  = TIM_CR1_CMS_0;
-    TIM1->PSC  = 0;
-    TIM1->ARR  = 4499;
-    TIM1->DIER = TIM_DIER_UIE;
-    TIM1->EGR  = TIM_EGR_UG;
-    TIM1->SR   = 0;
+    (void)RCC->APB2ENR;                         // dummy read — flushes write pipeline,
+                                                 // ensures clock is active before config
+
+    // ── Center-aligned PWM, 20kHz ─────────────────────────────────────────────
+    // CMS_0: counter counts 0→4499→0, triangle wave
+    // Update interrupt fires at bottom (count=0) — current loop runs here
+    // ADC triggered at top (count=4499) — current sampled mid-switching cycle
+    TIM1->CR1  = TIM_CR1_CMS_0;                 // center-aligned mode 1
+    TIM1->PSC  = 0;                              // prescaler ÷1 — full 180MHz
+    TIM1->ARR  = 4499;                           // 180MHz / (2×4500) = 20kHz
+
+    // ── Update interrupt — triggers current/velocity loop ISR ────────────────
+    TIM1->DIER = TIM_DIER_UIE;                  // enable update interrupt
+
+    // ── Force load ARR/PSC shadow registers → active registers ───────────────
+    TIM1->EGR  = TIM_EGR_UG;                    // generate update event to latch values
+    TIM1->SR   = 0;                              // clear the UIF flag EGR_UG just set
+                                                 // prevents spurious ISR on first start
+
+    // ── NVIC ──────────────────────────────────────────────────────────────────
+    // Priority 1: below DMA ISR (priority 2) — DMA runs first on contention
+    // Above SysTick (priority 15) — current loop never preempted by 1kHz tick
     NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
+
+    // ── Start counter ─────────────────────────────────────────────────────────
+    // PWM outputs not yet enabled — added when channel config is complete
     TIM1->CR1 |= TIM_CR1_CEN;
 }
 
