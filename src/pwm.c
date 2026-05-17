@@ -97,6 +97,7 @@ void pwm_init(void)
     TIM1->EGR  = TIM_EGR_UG;                    // force load ARR/PSC/CCR shadow regs
     TIM1->SR   = 0;                              // clear UIF set by EGR_UG
 
+    
     // ── NVIC ──────────────────────────────────────────────────────────────────
     NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);

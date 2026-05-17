@@ -8,6 +8,7 @@
 #include "drive.h"
 #include "loops.h"
 #include "clock.h"
+#include "pwm.h"
 
 // ── READY signal — PC13, active high → Pi refills ring buffer ────────────────
 #define READY_PIN       13u
@@ -90,83 +91,36 @@ void TIM1_UP_TIM10_IRQHandler(void)
     plant_step(&plant, v_q_cmd, DT_CURRENT);
 }
 
-// tim1_init — 3-phase complementary PWM + current/velocity loop interrupt
-//
-// TIM1 runs two jobs simultaneously:
-//   1. Generates 6 PWM signals (3 complementary pairs) for the DRV8353RS-EVM gate driver
-//      PA8/PA7  → Phase A high/low
-//      PA9/PB0  → Phase B high/low
-//      PA10/PB1 → Phase C high/low
-//
-//   2. Fires an update interrupt at 20kHz (center-aligned bottom) which runs:
-//      - Current loop  @ 20kHz (every ISR tick)
-//      - Velocity loop @ 5kHz  (every 4th ISR tick via vel_div)
-//
-// Center-aligned mode ensures ADC current sampling (triggered at peak) is
-// noise-free — switching transitions happen at peak/valley, not mid-sample.
-//
-// TIM1 clock: APB2=90MHz × 2 = 180MHz
-// ARR=4499, center-aligned → period = 2×4500 / 180MHz = 50µs = 20kHz
-// Dead time insertion added when PWM channels are enabled (not yet configured)
-static void tim1_init(void)
-{
-    // ── Clock ─────────────────────────────────────────────────────────────────
-    RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
-    (void)RCC->APB2ENR;                         // dummy read — flushes write pipeline,
-                                                 // ensures clock is active before config
-
-    // ── Center-aligned PWM, 20kHz ─────────────────────────────────────────────
-    // CMS_0: counter counts 0→4499→0, triangle wave
-    // Update interrupt fires at bottom (count=0) — current loop runs here
-    // ADC triggered at top (count=4499) — current sampled mid-switching cycle
-    TIM1->CR1  = TIM_CR1_CMS_0;                 // center-aligned mode 1
-    TIM1->PSC  = 0;                              // prescaler ÷1 — full 180MHz
-    TIM1->ARR  = 4499;                           // 180MHz / (2×4500) = 20kHz
-
-    // ── Update interrupt — triggers current/velocity loop ISR ────────────────
-    TIM1->DIER = TIM_DIER_UIE;                  // enable update interrupt
-
-    // ── Force load ARR/PSC shadow registers → active registers ───────────────
-    TIM1->EGR  = TIM_EGR_UG;                    // generate update event to latch values
-    TIM1->SR   = 0;                              // clear the UIF flag EGR_UG just set
-                                                 // prevents spurious ISR on first start
-
-    // ── NVIC ──────────────────────────────────────────────────────────────────
-    // Priority 1: below DMA ISR (priority 2) — DMA runs first on contention
-    // Above SysTick (priority 15) — current loop never preempted by 1kHz tick
-    NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
-    NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
-
-    // ── Start counter ─────────────────────────────────────────────────────────
-    // PWM outputs not yet enabled — added when channel config is complete
-    TIM1->CR1 |= TIM_CR1_CEN;
-}
-
 int main(void)
 {
-    
-    clock_init();   
+    // ── System clock — HSI → PLL → 180MHz ────────────────────────────────────
+    clock_init();
 
+    // ── Telemetry sentinel values — Pi detects stale frame if these appear ────
     telem_buf[1].pos_cmd      = 0x12345678;
     telem_buf[1].pos_fbk      = 0x87654321;
     telem_buf[1].timestamp_ms = 0xDEADBEEF;
     telem_buf[1].drive_state  = DRIVE_IDLE;
     telem_write_idx           = 0;
 
-    RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
-    (void)RCC->AHB1ENR;
+    // ── READY signal — PC13, active low → Pi refills ring buffer ─────────────
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
     (void)RCC->AHB1ENR;
-
     GPIOC->MODER  &= ~(3u << (READY_PIN * 2));
     GPIOC->MODER  |=  (1u << (READY_PIN * 2));
     GPIOC->OTYPER &= ~(1u << READY_PIN);
-    GPIOC->BSRR    =  READY_SET_HIGH;
+    GPIOC->BSRR    =  READY_SET_HIGH;          // deassert — ring not ready yet
 
-    spi_init();
-    encoder_init();
-    tim1_init();
-    SysTick_Config(180000);
+    // ── Peripherals ───────────────────────────────────────────────────────────
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
+    (void)RCC->AHB1ENR;
 
-    while (1) {}
+    spi_init();                                 // SPI2 slave + DMA ring fill
+    encoder_init();                             // TIM5 quadrature decoder
+    pwm_init();                                 // TIM1 20kHz PWM, MOE=0
+
+    // ── Start scheduler — 1kHz SysTick drives position loop + state machine ──
+    SysTick_Config(180000);                     // 180MHz / 180000 = 1kHz
+
+    while (1) {}                                // all work is interrupt-driven
 }

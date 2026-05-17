@@ -34,4 +34,6 @@ compile_commands.json
 .cache/
 # ===== OS junk =====
 Thumbs.db
+#=== Manual
+docs/*.pdf
 EOF
