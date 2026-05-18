@@ -15,6 +15,7 @@
 #include "loops.h"
 #include "plant.h"
 #include "ringBuffer.h"
+#include "pwm.h"
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static DriveState state      = STATE_IDLE;
@@ -104,6 +105,7 @@ void drive_update(void)
             enable_req = 0;
             loops_reset();
             plant_init(&plant);
+            pwm_enable();           // ← add
             state      = STATE_ENABLED;
             entry_flag = 1;
         }
@@ -120,6 +122,7 @@ void drive_update(void)
         if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
         {
             state      = STATE_IDLE;
+            pwm_disable();         
             entry_flag = 1;
             first_sample_ready = 0;
         }
@@ -128,6 +131,7 @@ void drive_update(void)
     case STATE_FAULT:
         // PWM disabled — waiting for explicit fault clear
         // TODO: add fault reset request and transition back to IDLE
+         pwm_disable();          
         break;
     }
 }
