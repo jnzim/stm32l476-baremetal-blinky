@@ -16,13 +16,14 @@
 #include "plant.h"
 #include "ringBuffer.h"
 #include "pwm.h"
+#include "config.h"
+#include <math.h>
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static DriveState state      = STATE_IDLE;
 static DriveState state_prev = STATE_IDLE;
 
 // ── Request flags — set by ISRs, cleared by drive_update() ───────────────────
-// volatile: written by DMA ISR, read by SysTick — compiler must not cache
 static volatile uint8_t enable_req = 0;
 static volatile uint8_t fault_req  = 0;
 
@@ -30,8 +31,11 @@ static volatile uint8_t fault_req  = 0;
 extern PlantState plant;
 static uint8_t entry_flag = 0;
 
+// ── Open-loop / alignment state ───────────────────────────────────────────────
+static float ol_theta = 0.0f;          // open-loop electrical angle accumulator
+
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_init — call once at startup before any ISRs are enabled
+// drive_init
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_init(void)
 {
@@ -43,7 +47,6 @@ void drive_init(void)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_request_enable — called from DMA ISR on BLOCK_HDR receipt
-// Sets flag only — transition happens in drive_update() at next SysTick tick
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_request_enable(void)
 {
@@ -52,7 +55,6 @@ void drive_request_enable(void)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_request_fault — called from any ISR on fault condition
-// Fault is latched — cleared only by explicit fault reset (not implemented yet)
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_request_fault(void)
 {
@@ -60,8 +62,7 @@ void drive_request_fault(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_get_state — called from TIM1 ISR to gate loop execution
-// Read only — never transitions state
+// drive_get_state
 // ─────────────────────────────────────────────────────────────────────────────
 DriveState drive_get_state(void)
 {
@@ -69,7 +70,7 @@ DriveState drive_get_state(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_is_entry — returns 1 on first tick of a new state, clears automatically
+// drive_is_entry
 // ─────────────────────────────────────────────────────────────────────────────
 uint8_t drive_is_entry(void)
 {
@@ -79,16 +80,46 @@ uint8_t drive_is_entry(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_update — call from SysTick at 1kHz
+// drive_align_rotor — apply fixed d-axis voltage at theta=0
 //
-// Processes request flags and executes state transitions.
-// Fault takes priority over all other transitions.
+// Forces rotor to a known electrical angle before closing the FOC loop.
+// Required for AKM11E (N2 option — no Hall sensors).
+// Call repeatedly from STATE_ALIGN for ALIGN_TIME_MS before transitioning.
+//
+// v_d = ALIGN_VOLTAGE, v_q = 0 → torque = 0, rotor locks to theta=0
+// ─────────────────────────────────────────────────────────────────────────────
+void drive_align_rotor(void)
+{
+    pwm_apply_vq(0.0f, ALIGN_VOLTAGE, 0.0f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drive_open_loop_step — advance electrical angle and apply voltage
+//
+// Spins motor open loop without encoder feedback.
+// Used to verify phase wiring and encoder direction before closing loops.
+//
+// v_mag:   voltage magnitude (volts) — keep low, e.g. 1.0–2.0V at 12V bus
+// d_theta: angle increment per call (radians) — sets speed
+//          at 1kHz SysTick: d_theta = 2π * f_elec / 1000
+//          e.g. 1Hz electrical: d_theta = 0.00628f
+// ─────────────────────────────────────────────────────────────────────────────
+void drive_open_loop_step(float v_mag, float d_theta)
+{
+    ol_theta += d_theta;
+    if (ol_theta >= 2.0f * M_PI) ol_theta -= 2.0f * M_PI;
+    pwm_apply_vq(v_mag, 0.0f, ol_theta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drive_update — call from SysTick at 1kHz
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_update(void)
 {
     // fault takes priority from any state — latches immediately
     if (fault_req)
     {
+        pwm_disable();
         state     = STATE_FAULT;
         fault_req = 0;
         return;
@@ -100,30 +131,31 @@ void drive_update(void)
 
     case STATE_IDLE:
         // waiting for BLOCK_HDR from Pi — DMA ISR sets enable_req
-        if (enable_req) 
+        if (enable_req)
         {
             enable_req = 0;
             loops_reset();
             plant_init(&plant);
-            pwm_enable();           // ← add
+            ol_theta = 0.0f;        // reset open-loop angle for clean start
+            pwm_enable();
             state      = STATE_ENABLED;
             entry_flag = 1;
         }
         break;
 
     case STATE_ALIGN:
-        // real HW: fire rotor alignment pulse, wait for completion
+        // Hold rotor at theta=0 for ALIGN_TIME_MS before enabling FOC
         // AKM11E has no Hall sensors (N2 option) — alignment required at startup
-        // sim mode: this state is never entered
-        state = STATE_ENABLED;
+        // TODO: add tick counter, transition to STATE_ENABLED after ALIGN_TIME_MS
+        drive_align_rotor();
         break;
 
     case STATE_ENABLED:
         if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
         {
-            state      = STATE_IDLE;
-            pwm_disable();         
-            entry_flag = 1;
+            pwm_disable();
+            state              = STATE_IDLE;
+            entry_flag         = 1;
             first_sample_ready = 0;
         }
         break;
@@ -131,7 +163,7 @@ void drive_update(void)
     case STATE_FAULT:
         // PWM disabled — waiting for explicit fault clear
         // TODO: add fault reset request and transition back to IDLE
-         pwm_disable();          
+        pwm_disable();
         break;
     }
 }

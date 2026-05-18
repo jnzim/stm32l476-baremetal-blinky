@@ -1,9 +1,7 @@
 // drive.h — servo drive state machine
 // States: IDLE → ALIGN → ENABLED → IDLE
 //         any state → FAULT on fault condition
-#ifndef DRIVE_H
-#define DRIVE_H
-
+#pragma once
 #include <stdint.h>
 
 typedef enum {
@@ -26,7 +24,14 @@ void drive_request_fault(void);    // fault detected → latch fault
 // State query — called from TIM1 ISR to gate loop execution
 DriveState drive_get_state(void);
 
-// True only on first tick of a new state — use for one-time init
+// True only on first tick of a new state
 uint8_t drive_is_entry(void);
 
-#endif
+// Alignment — apply d-axis voltage at theta=0, v_q=0
+// Call repeatedly from STATE_ALIGN for ALIGN_TIME_MS
+void drive_align_rotor(void);
+
+// Open-loop spin — advance electrical angle by d_theta each call
+// v_mag: voltage magnitude (volts)
+// d_theta: angle increment per call (radians)
+void drive_open_loop_step(float v_mag, float d_theta);

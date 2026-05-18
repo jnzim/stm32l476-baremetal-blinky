@@ -93,6 +93,9 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
 int main(void)
 {
+    // ── Enable FPU — must be before any float instructions ────────────────────
+    SCB->CPACR |= ((3UL << 10*2) | (3UL << 11*2));
+    
     // ── System clock — HSI → PLL → 180MHz ────────────────────────────────────
     clock_init();
 
