@@ -32,7 +32,7 @@ void SysTick_Handler(void)
     tick_ms++;
     drive_update();
 
-    if (drive_get_state() == STATE_ENABLED)
+    if (drive_get_state() == STATE_SERVO_ON)
     {
         if (drive_is_entry())
             first_sample_ready = 0;
@@ -76,7 +76,7 @@ void SysTick_Handler(void)
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = 0;
-    if (drive_get_state() != STATE_ENABLED) return;
+    if (drive_get_state() != STATE_SERVO_ON) return;
     if (!first_sample_ready) return;
 
     if (++vel_div >= 4)

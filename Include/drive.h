@@ -1,37 +1,26 @@
-// drive.h — servo drive state machine
-// States: IDLE → ALIGN → ENABLED → IDLE
-//         any state → FAULT on fault condition
-#pragma once
+#ifndef DRIVE_H
+#define DRIVE_H
+
 #include <stdint.h>
 
 typedef enum {
-    STATE_IDLE    = 0,
-    STATE_ALIGN   = 1,
-    STATE_ENABLED = 2,
-    STATE_FAULT   = 3
+    STATE_IDLE      = 0,
+    STATE_OPEN_LOOP = 1,
+    STATE_ALIGN     = 2,
+    STATE_SERVO_ON  = 3,
+    STATE_FAULT     = 4,
 } DriveState;
 
-// Initialize state machine — call once at startup
-void drive_init(void);
-
-// Update state machine — call from SysTick at 1kHz
-void drive_update(void);
-
-// Transition requests — called from ISR or SPI handler
-void drive_request_enable(void);   // BLOCK_HDR received → request enable
-void drive_request_fault(void);    // fault detected → latch fault
-
-// State query — called from TIM1 ISR to gate loop execution
+// Lifecycle
+void       drive_init(void);
+void       drive_update(void);
 DriveState drive_get_state(void);
+uint8_t    drive_is_entry(void);
 
-// True only on first tick of a new state
-uint8_t drive_is_entry(void);
+// Request functions — called from ISRs, flags consumed by drive_update()
+void drive_request_servo_on(void);
+void drive_request_open_loop(float v_mag, float d_theta);
+void drive_request_stop(void);
+void drive_request_fault(void);
 
-// Alignment — apply d-axis voltage at theta=0, v_q=0
-// Call repeatedly from STATE_ALIGN for ALIGN_TIME_MS
-void drive_align_rotor(void);
-
-// Open-loop spin — advance electrical angle by d_theta each call
-// v_mag: voltage magnitude (volts)
-// d_theta: angle increment per call (radians)
-void drive_open_loop_step(float v_mag, float d_theta);
+#endif // DRIVE_H

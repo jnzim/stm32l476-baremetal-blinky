@@ -3,12 +3,11 @@
 // Architecture:
 //   drive_update() runs in SysTick at 1kHz — only place state transitions happen
 //   TIM1 ISR calls drive_get_state() to gate loop execution — reads only, never writes
-//   DMA ISR calls drive_request_enable() / drive_request_fault() — sets flags only
+//   DMA ISR calls drive_request_*() — sets flags only
 //
-// This keeps the state machine deterministic:
-//   - One writer (SysTick), multiple readers (TIM1, DMA)
-//   - Flag writes are single-byte — atomic on Cortex-M4, no critical section needed
-//   - State transitions never happen inside a high-priority ISR
+// State transitions happen in IDLE.
+// State initialization happens on entry in the destination state.
+// This keeps each state self-contained and consistent.
 
 #include "drive.h"
 #include "spi.h"
@@ -18,44 +17,64 @@
 #include "pwm.h"
 #include "config.h"
 #include <math.h>
+#include <stdint.h>
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static DriveState state      = STATE_IDLE;
 static DriveState state_prev = STATE_IDLE;
 
 // ── Request flags — set by ISRs, cleared by drive_update() ───────────────────
-static volatile uint8_t enable_req = 0;
-static volatile uint8_t fault_req  = 0;
+static volatile uint8_t servo_on_req  = 0;
+static volatile uint8_t open_loop_req = 0;
+static volatile uint8_t stop_req      = 0;
+static volatile uint8_t fault_req     = 0;
+
+// ── Open-loop parameters — written by DMA ISR, read by SysTick ───────────────
+static volatile float ol_v_mag   = 0.0f;
+static volatile float ol_d_theta = 0.0f;
+
+// ── Open-loop angle accumulator ───────────────────────────────────────────────
+static float ol_theta = 0.0f;
 
 // ── entry_flag — set on state transition, cleared by drive_is_entry() ────────
 extern PlantState plant;
 static uint8_t entry_flag = 0;
-
-// ── Open-loop / alignment state ───────────────────────────────────────────────
-static float ol_theta = 0.0f;          // open-loop electrical angle accumulator
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_init
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_init(void)
 {
-    state      = STATE_IDLE;
-    state_prev = STATE_IDLE;
-    enable_req = 0;
-    fault_req  = 0;
+    state         = STATE_IDLE;
+    state_prev    = STATE_IDLE;
+    servo_on_req  = 0;
+    open_loop_req = 0;
+    stop_req      = 0;
+    fault_req     = 0;
+    entry_flag    = 0;
+    ol_theta      = 0.0f;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_request_enable — called from DMA ISR on BLOCK_HDR receipt
+// Request functions — called from DMA ISR or any ISR
 // ─────────────────────────────────────────────────────────────────────────────
-void drive_request_enable(void)
+void drive_request_servo_on(void)
 {
-    enable_req = 1;
+    servo_on_req = 1;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// drive_request_fault — called from any ISR on fault condition
-// ─────────────────────────────────────────────────────────────────────────────
+void drive_request_open_loop(float v_mag, float d_theta)
+{
+    ol_v_mag      = v_mag;
+    ol_d_theta    = d_theta;
+    open_loop_req = 1;
+}
+
+void drive_request_stop(void)
+{
+    stop_req = 1;
+}
+
 void drive_request_fault(void)
 {
     fault_req = 1;
@@ -70,7 +89,7 @@ DriveState drive_get_state(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_is_entry
+// drive_is_entry — returns 1 once on state entry, then 0
 // ─────────────────────────────────────────────────────────────────────────────
 uint8_t drive_is_entry(void)
 {
@@ -82,11 +101,8 @@ uint8_t drive_is_entry(void)
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_align_rotor — apply fixed d-axis voltage at theta=0
 //
-// Forces rotor to a known electrical angle before closing the FOC loop.
+// Forces rotor to known electrical angle before closing FOC loop.
 // Required for AKM11E (N2 option — no Hall sensors).
-// Call repeatedly from STATE_ALIGN for ALIGN_TIME_MS before transitioning.
-//
-// v_d = ALIGN_VOLTAGE, v_q = 0 → torque = 0, rotor locks to theta=0
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_align_rotor(void)
 {
@@ -96,13 +112,9 @@ void drive_align_rotor(void)
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_open_loop_step — advance electrical angle and apply voltage
 //
-// Spins motor open loop without encoder feedback.
-// Used to verify phase wiring and encoder direction before closing loops.
-//
-// v_mag:   voltage magnitude (volts) — keep low, e.g. 1.0–2.0V at 12V bus
-// d_theta: angle increment per call (radians) — sets speed
-//          at 1kHz SysTick: d_theta = 2π * f_elec / 1000
-//          e.g. 1Hz electrical: d_theta = 0.00628f
+// v_mag:   voltage magnitude in volts
+// d_theta: angle increment per SysTick tick (radians)
+//          1Hz electrical at 1kHz SysTick: 2π/1000 = 0.00628f
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_open_loop_step(float v_mag, float d_theta)
 {
@@ -129,28 +141,60 @@ void drive_update(void)
 
     switch (state) {
 
+    // ── IDLE — waiting for Pi command ─────────────────────────────────────────
     case STATE_IDLE:
-        // waiting for BLOCK_HDR from Pi — DMA ISR sets enable_req
-        if (enable_req)
+        if (open_loop_req)
         {
-            enable_req = 0;
-            loops_reset();
-            plant_init(&plant);
-            ol_theta = 0.0f;        // reset open-loop angle for clean start
+            open_loop_req = 0;
+            state         = STATE_OPEN_LOOP;
+            entry_flag    = 1;
+        }
+        else if (servo_on_req)
+        {
+            servo_on_req = 0;
+            state        = STATE_SERVO_ON;
+            entry_flag   = 1;
+        }
+        break;
+
+    // ── OPEN_LOOP — spinning without feedback ─────────────────────────────────
+    case STATE_OPEN_LOOP:
+        if (drive_is_entry())
+        {
+            ol_theta = 0.0f;
             pwm_enable();
-            state      = STATE_ENABLED;
+        }
+        drive_open_loop_step(ol_v_mag, ol_d_theta);
+        if (stop_req)
+        {
+            stop_req   = 0;
+            pwm_disable();
+            state      = STATE_IDLE;
             entry_flag = 1;
         }
         break;
 
+    // ── ALIGN — lock rotor to theta=0 before closing FOC ─────────────────────
     case STATE_ALIGN:
-        // Hold rotor at theta=0 for ALIGN_TIME_MS before enabling FOC
-        // AKM11E has no Hall sensors (N2 option) — alignment required at startup
-        // TODO: add tick counter, transition to STATE_ENABLED after ALIGN_TIME_MS
+        if (drive_is_entry())
+        {
+            pwm_enable();
+        }
         drive_align_rotor();
+        // TODO: tick counter → STATE_SERVO_ON after ALIGN_TIME_MS
         break;
 
-    case STATE_ENABLED:
+    // ── SERVO_ON — closed-loop FOC with trajectory ────────────────────────────
+    case STATE_SERVO_ON:
+        if (drive_is_entry())
+        {
+            loops_reset();
+            plant_init(&plant);
+            ol_theta           = 0.0f;
+            first_sample_ready = 0;
+            samples_consumed   = 0;
+            pwm_enable();
+        }
         if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
         {
             pwm_disable();
@@ -160,10 +204,10 @@ void drive_update(void)
         }
         break;
 
+    // ── FAULT — latched, PWM disabled ────────────────────────────────────────
     case STATE_FAULT:
-        // PWM disabled — waiting for explicit fault clear
-        // TODO: add fault reset request and transition back to IDLE
         pwm_disable();
+        // TODO: fault reset opcode → STATE_IDLE
         break;
     }
 }
