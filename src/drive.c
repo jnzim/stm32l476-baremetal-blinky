@@ -13,6 +13,7 @@
 #include "spi.h"
 #include "loops.h"
 #include "plant.h"
+#include "control.h"
 #include "ringBuffer.h"
 #include "pwm.h"
 #include "config.h"
@@ -38,7 +39,7 @@ static float ol_theta = 0.0f;
 
 // ── entry_flag — set on state transition, cleared by drive_is_entry() ────────
 extern PlantState plant;
-static uint8_t entry_flag = 0;
+static uint8_t starting_flag = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_init
@@ -51,7 +52,7 @@ void drive_init(void)
     open_loop_req = 0;
     stop_req      = 0;
     fault_req     = 0;
-    entry_flag    = 0;
+    starting_flag  = 0;
     ol_theta      = 0.0f;
 }
 
@@ -89,12 +90,12 @@ DriveState drive_get_state(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_is_entry — returns 1 once on state entry, then 0
+// starting_flag — returns 1 once on state entry, then 0
 // ─────────────────────────────────────────────────────────────────────────────
-uint8_t drive_is_entry(void)
+uint8_t starting(void)
 {
-    uint8_t e = entry_flag;
-    entry_flag = 0;
+    uint8_t e = starting_flag;
+    starting_flag = 0;
     return e;
 }
 
@@ -107,20 +108,6 @@ uint8_t drive_is_entry(void)
 void drive_align_rotor(void)
 {
     pwm_apply_vq(0.0f, ALIGN_VOLTAGE, 0.0f);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// drive_open_loop_step — advance electrical angle and apply voltage
-//
-// v_mag:   voltage magnitude in volts
-// d_theta: angle increment per SysTick tick (radians)
-//          1Hz electrical at 1kHz SysTick: 2π/1000 = 0.00628f
-// ─────────────────────────────────────────────────────────────────────────────
-void drive_open_loop_step(float v_mag, float d_theta)
-{
-    ol_theta += d_theta;
-    if (ol_theta >= 2.0f * M_PI) ol_theta -= 2.0f * M_PI;
-    pwm_apply_vq(v_mag, 0.0f, ol_theta);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,67 +134,74 @@ void drive_update(void)
         {
             open_loop_req = 0;
             state         = STATE_OPEN_LOOP;
-            entry_flag    = 1;
+            starting_flag    = 1;
         }
         else if (servo_on_req)
         {
             servo_on_req = 0;
             state        = STATE_SERVO_ON;
-            entry_flag   = 1;
+            starting_flag   = 1;
         }
         break;
 
-    // ── OPEN_LOOP — spinning without feedback ─────────────────────────────────
+    // ── OPEN_LOOP — spinning without encoder feedback ─────────────────────────
+    // ol_v_mag and ol_d_theta set by drive_request_open_loop() from DMA ISR.
+    // open_loop_step() lives in control.c — it's motor math, not state logic.
     case STATE_OPEN_LOOP:
-        if (drive_is_entry())
+        if (starting())
         {
             ol_theta = 0.0f;
             pwm_enable();
         }
-        drive_open_loop_step(ol_v_mag, ol_d_theta);
+        open_loop_step(&ol_theta, ol_v_mag, ol_d_theta);
         if (stop_req)
         {
             stop_req   = 0;
             pwm_disable();
             state      = STATE_IDLE;
-            entry_flag = 1;
+            starting_flag = 1;
         }
         break;
 
     // ── ALIGN — lock rotor to theta=0 before closing FOC ─────────────────────
+    // Applies fixed d-axis voltage with v_q=0 — no torque, rotor locks to theta=0.
+    // Required for AKM11E (N2 encoder-only option, no Hall sensors).
     case STATE_ALIGN:
-        if (drive_is_entry())
-        {
+        if (starting())
             pwm_enable();
-        }
         drive_align_rotor();
         // TODO: tick counter → STATE_SERVO_ON after ALIGN_TIME_MS
         break;
 
-    // ── SERVO_ON — closed-loop FOC with trajectory ────────────────────────────
+    // ── SERVO_ON — closed-loop FOC with trajectory from Pi ───────────────────
     case STATE_SERVO_ON:
-        if (drive_is_entry())
+        if (starting())
         {
             loops_reset();
-            plant_init(&plant);
+#ifdef SIM_MODE
+            plant_init(&plant);     // sim only — zero plant state on entry
+#endif
             ol_theta           = 0.0f;
             first_sample_ready = 0;
             samples_consumed   = 0;
             pwm_enable();
         }
+        // Move complete — ring drained, return to IDLE
         if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
         {
             pwm_disable();
             state              = STATE_IDLE;
-            entry_flag         = 1;
+            starting_flag      = 1;
             first_sample_ready = 0;
         }
         break;
 
     // ── FAULT — latched, PWM disabled ────────────────────────────────────────
+    // DRV8353RS already killed gate outputs when nFAULT asserted.
+    // Requires fault reset opcode from Pi to recover → STATE_IDLE.
     case STATE_FAULT:
         pwm_disable();
-        // TODO: fault reset opcode → STATE_IDLE
+        // TODO: SPI2_OP_FAULT_RESET → pulse ENABLE low 20µs → STATE_IDLE
         break;
     }
 }

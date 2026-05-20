@@ -15,7 +15,7 @@ typedef enum {
 void       drive_init(void);
 void       drive_update(void);
 DriveState drive_get_state(void);
-uint8_t    drive_is_entry(void);
+uint8_t    starting(void);
 
 // Request functions — called from ISRs, flags consumed by drive_update()
 void drive_request_servo_on(void);
