@@ -115,6 +115,12 @@ static uint8_t crc8_xor(const uint8_t *buf, int len)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DMA1_Stream3_IRQHandler — SPI2 RX complete
+//
+// Data path: SPI2 DR → DMA1 Stream3 → spi2_rx_buf → ISR → ring buffer → SysTick
+//
+// Circular DMA restarts immediately after TCIF fires. Snapshot buffer before
+// clearing TCIF — DMA just reset its pointer to byte 0 and needs one SPI clock
+// before writing. memcpy of 32 bytes at 180MHz (~100ns) is well inside window.
 // ─────────────────────────────────────────────────────────────────────────────
 void DMA1_Stream3_IRQHandler(void)
 {
@@ -151,6 +157,7 @@ void DMA1_Stream3_IRQHandler(void)
 
         case SPI2_OP_OPEN_LOOP:
         {
+            // v_mag and d_theta packed as float32 little-endian
             if (crc8_xor(local, 9) != local[9]) { cnt_error++; break; }
             float v_mag, d_theta;
             memcpy(&v_mag,   &local[1], sizeof(float));
@@ -189,6 +196,10 @@ void spi_process(void)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_update_telem — atomically swap TX DMA to freshly written telem slot
+//
+// Safe: M0AR write is 32-bit atomic on Cortex-M4. TX DMA reads M0AR only at
+// the start of each revolution (NDTR wrap). Update while DMA is mid-packet
+// so swap takes effect at next clean packet boundary.
 // ─────────────────────────────────────────────────────────────────────────────
 void spi_update_telem(const TelemetryFrame *frame)
 {
