@@ -65,12 +65,12 @@ All work happens in three interrupt handlers firing on independent schedules.
 
 | Pi 5 Pin | Pi 5 Signal  | Wire Color | STM32 Pin | Nucleo Header | STM32 Function     |
 |----------|--------------|------------|-----------|---------------|--------------------|
-| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | CN7 pin 8     | SPI2 MOSI          |
-| Pin 9    | GND          | Black      | —         | J1 pin 3 (EVM)| GND common         |
-| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | CN7 pin 6     | SPI2 MISO          |
-| Pin 22   | GPIO 25      | Green      | PC13      | CN7 pin 23    | READY (active low) |
-| Pin 23   | GPIO 11 SCK  | Red        | PB13      | CN7 pin 4     | SPI2 SCK           |
-| Pin 26   | GPIO 7 CE1   | Brown      | PB12      | CN7 pin 2     | SPI2 NSS           |
+| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | CN7 pin 28     | SPI2 MOSI          |
+| Pin 9    | GND          | Black      | —         | J1 pin 3 (EVM) | GND common         |
+| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | CN7 pin 26     | SPI2 MISO          |
+| Pin 22   | GPIO 25      | Green      | PC13      | CN7 pin 23     | READY (active low) |
+| Pin 23   | GPIO 11 SCK  | Red        | PB13      | CN7 pin 30     | SPI2 SCK           |
+| Pin 26   | GPIO 7 CE1   | Brown      | PB12      | CN7 pin 2      | SPI2 NSS           |
 
 ### STM32 ↔ DRV8353RS-EVM (3-phase PWM)
 
