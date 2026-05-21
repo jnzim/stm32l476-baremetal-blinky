@@ -186,7 +186,7 @@ int main(void)
     pwm_init();                                    // TIM1 20kHz PWM, MOE=0
 
     // ── Start scheduler — 1kHz SysTick ───────────────────────────────────────
-    SysTick_Config(180000);                        // 180MHz / 180000 = 1kHz
+    SysTick_Config(100000);                        // 100MHz 
 
     while (1) {}                                   // all work is interrupt-driven
 }

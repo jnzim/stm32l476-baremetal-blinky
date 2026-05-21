@@ -1,18 +1,11 @@
-// spi.c — SPI2 slave + DMA, STM32F446RE bare metal
+// spi.c — SPI2 slave + DMA, STM32F411RE bare metal
 //
 // SPI2 pins: PB12=NSS, PB13=SCK, PB14=MISO, PB15=MOSI (AF5)
 // DMA1 Stream3 Ch0 = SPI2_RX   (periph → memory, circular, fires every 32 bytes)
-// DMA1 Stream4 Ch0 = SPI2_TX   (memory → periph, circular)
+// DMA1 Stream4 Ch0 = SPI2_TX   (memory → periph, re-armed on each CS falling edge)
 //
-// RX strategy: circular DMA into spi2_rx_buf[32].
-//   TCIF fires every 32 bytes. ISR snapshots buffer into local[], clears TCIF,
-//   decodes from snapshot. Safe because DMA just reset its pointer to byte 0
-//   and needs one SPI clock before writing — memcpy of 32 bytes at 180MHz
-//   (~18 cycles, ~100ns) is well inside that window.
-//
-// TX strategy: circular DMA replays telem_buf[read_slot] continuously.
-//   spi_update_telem() atomically swaps M0AR to the freshly written slot.
-//   TX never needs an interrupt.
+// TX strategy: EXTI12 fires on CS falling edge, resets Stream4 to byte 0 of
+//   telem_buf before Pi clocks out MISO. Ensures MISO always starts at byte 0.
 
 #include "spi.h"
 #include "ringBuffer.h"
@@ -26,18 +19,39 @@
 #define SPI2_PKT_LEN  SPI2_TRANSACTION_BYTES   // 32
 
 // ── Telemetry double-buffer ───────────────────────────────────────────────────
-// telem_buf[0]: written by TIM1 ISR via spi_update_telem()
-// telem_buf[1]: read by TX DMA (M0AR points here until swapped)
 volatile TelemetryFrame telem_buf[2];
 volatile uint8_t        telem_write_idx = 0;
 
 // ── RX buffer — circular DMA writes here continuously ────────────────────────
 static volatile uint8_t spi2_rx_buf[SPI2_PKT_LEN];
 
-// ── Diagnostic counters (remove when stable) ─────────────────────────────────
-volatile uint32_t cnt_data          = 0;
-volatile uint32_t cnt_telem         = 0;
-volatile uint32_t cnt_error         = 0;
+// ── Diagnostic counters ───────────────────────────────────────────────────────
+volatile uint32_t cnt_data  = 0;
+volatile uint32_t cnt_telem = 0;
+volatile uint32_t cnt_error = 0;
+volatile uint32_t cnt_ovr   = 0;
+volatile uint32_t cnt_cs    = 0;   // CS falling edge count
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tx_dma_rearm — reset Stream4 to byte 0 of current telem slot
+// Called from EXTI12 on CS falling edge
+// ─────────────────────────────────────────────────────────────────────────────
+static inline void tx_dma_rearm(void)
+{
+    // Disable Stream4
+    DMA1_Stream4->CR &= ~DMA_SxCR_EN;
+    while (DMA1_Stream4->CR & DMA_SxCR_EN);
+
+    // Clear flags
+    DMA1->HIFCR = DMA_HIFCR_CTCIF4 | DMA_HIFCR_CHTIF4 |
+                  DMA_HIFCR_CTEIF4  | DMA_HIFCR_CDMEIF4 | DMA_HIFCR_CFEIF4;
+
+    // Reset to byte 0 of current telem slot
+    uint8_t slot = telem_write_idx ^ 1u;
+    DMA1_Stream4->M0AR = (uint32_t)&telem_buf[slot];
+    DMA1_Stream4->NDTR = SPI2_PKT_LEN;
+    DMA1_Stream4->CR  |= DMA_SxCR_EN;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_init
@@ -45,26 +59,36 @@ volatile uint32_t cnt_error         = 0;
 void spi_init(void)
 {
     // ── Clocks ────────────────────────────────────────────────────────────────
-    RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
-    RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    RCC->AHB1ENR  |= RCC_AHB1ENR_DMA1EN;
+    RCC->APB1ENR  |= RCC_APB1ENR_SPI2EN;
+    RCC->AHB1ENR  |= RCC_AHB1ENR_GPIOBEN;
+    RCC->APB2ENR  |= RCC_APB2ENR_SYSCFGEN;
 
     // ── GPIO PB12–PB15: AF5 = SPI2 ───────────────────────────────────────────
-    GPIOB->MODER &= ~((3u << 24) | (3u << 26) | (3u << 28) | (3u << 30));
-    GPIOB->MODER |=  ((2u << 24) | (2u << 26) | (2u << 28) | (2u << 30));
+    GPIOB->MODER   &= ~((3u << 24) | (3u << 26) | (3u << 28) | (3u << 30));
+    GPIOB->MODER   |=  ((2u << 24) | (2u << 26) | (2u << 28) | (2u << 30));
 
-    GPIOB->AFR[1] &= ~((0xFu << 16) | (0xFu << 20) | (0xFu << 24) | (0xFu << 28));
-    GPIOB->AFR[1] |=  ((5u   << 16) | (5u   << 20) | (5u   << 24) | (5u   << 28));
+    GPIOB->AFR[1]  &= ~((0xFu << 16) | (0xFu << 20) | (0xFu << 24) | (0xFu << 28));
+    GPIOB->AFR[1]  |=  ((5u   << 16) | (5u   << 20) | (5u   << 24) | (5u   << 28));
 
-    GPIOB->OSPEEDR |= ((3u << 24) | (3u << 26) | (3u << 28) | (3u << 30));
+    GPIOB->OSPEEDR |=  ((3u << 24) | (3u << 26) | (3u << 28) | (3u << 30));
 
-    // ── SPI2: slave, Mode 0, 8-bit, SSM=1 SSI=1 (software NSS) ──────────────
+    // ── EXTI12 — CS falling edge → rearm TX DMA ──────────────────────────────
+    SYSCFG->EXTICR[3] &= ~(0xFu << 0);   // EXTI12 → PB
+    SYSCFG->EXTICR[3] |=  (1u   << 0);
+
+    EXTI->FTSR |=  (1u << 12);   // falling edge trigger
+    EXTI->RTSR &= ~(1u << 12);   // not rising
+    EXTI->IMR  |=  (1u << 12);   // unmask
+
+    NVIC_SetPriority(EXTI15_10_IRQn, 1);   // higher priority than DMA RX
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+    // ── SPI2: configure, do NOT enable yet ───────────────────────────────────
     SPI2->CR1 = 0;
-    SPI2->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_SPE;
-
     SPI2->CR2 = SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN;
 
-    // ── DMA1 Stream4 Ch0: SPI2_TX — telem_buf[1] → SPI DR, circular ─────────
+    // ── DMA1 Stream4 Ch0: SPI2_TX ────────────────────────────────────────────
     DMA1_Stream4->CR &= ~DMA_SxCR_EN;
     while (DMA1_Stream4->CR & DMA_SxCR_EN);
 
@@ -82,9 +106,12 @@ void spi_init(void)
 
     DMA1_Stream4->CR |= DMA_SxCR_EN;
 
-    // ── DMA1 Stream3 Ch0: SPI2_RX — circular, fires every 32 bytes ───────────
+    // ── DMA1 Stream3 Ch0: SPI2_RX ────────────────────────────────────────────
     DMA1_Stream3->CR = 0;
     while (DMA1_Stream3->CR & DMA_SxCR_EN);
+
+    DMA1->LIFCR = DMA_LIFCR_CTCIF3 | DMA_LIFCR_CHTIF3 |
+                  DMA_LIFCR_CTEIF3  | DMA_LIFCR_CDMEIF3 | DMA_LIFCR_CFEIF3;
 
     DMA1_Stream3->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream3->M0AR = (uint32_t)spi2_rx_buf;
@@ -98,13 +125,28 @@ void spi_init(void)
 
     DMA1_Stream3->CR |= DMA_SxCR_EN;
 
-    // ── NVIC ──────────────────────────────────────────────────────────────────
+    // ── NVIC RX ───────────────────────────────────────────────────────────────
     NVIC_SetPriority(DMA1_Stream3_IRQn, 2);
     NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+
+    // ── Enable SPI last ───────────────────────────────────────────────────────
+    SPI2->CR1 = SPI_CR1_SPE;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// crc8_xor — XOR of bytes [0..len-1]
+// EXTI15_10_IRQHandler — CS falling edge
+// ─────────────────────────────────────────────────────────────────────────────
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI->PR & (1u << 12)) {
+        EXTI->PR = (1u << 12);   // clear pending
+        tx_dma_rearm();
+        cnt_cs++;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// crc8_xor
 // ─────────────────────────────────────────────────────────────────────────────
 static uint8_t crc8_xor(const uint8_t *buf, int len)
 {
@@ -115,18 +157,20 @@ static uint8_t crc8_xor(const uint8_t *buf, int len)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DMA1_Stream3_IRQHandler — SPI2 RX complete
-//
-// Data path: SPI2 DR → DMA1 Stream3 → spi2_rx_buf → ISR → ring buffer → SysTick
-//
-// Circular DMA restarts immediately after TCIF fires. Snapshot buffer before
-// clearing TCIF — DMA just reset its pointer to byte 0 and needs one SPI clock
-// before writing. memcpy of 32 bytes at 180MHz (~100ns) is well inside window.
 // ─────────────────────────────────────────────────────────────────────────────
 void DMA1_Stream3_IRQHandler(void)
 {
     if (!(DMA1->LISR & DMA_LISR_TCIF3)) return;
 
-    // Snapshot before clearing — DMA is at byte 0 of next revolution
+    // ── OVR check ─────────────────────────────────────────────────────────────
+    if (SPI2->SR & SPI_SR_OVR) {
+        (void)SPI2->DR;
+        (void)SPI2->SR;
+        DMA1->LIFCR = DMA_LIFCR_CTCIF3;
+        cnt_ovr++;
+        return;
+    }
+
     uint8_t local[SPI2_PKT_LEN];
     memcpy(local, (void*)spi2_rx_buf, SPI2_PKT_LEN);
     DMA1->LIFCR = DMA_LIFCR_CTCIF3;
@@ -157,7 +201,6 @@ void DMA1_Stream3_IRQHandler(void)
 
         case SPI2_OP_OPEN_LOOP:
         {
-            // v_mag and d_theta packed as float32 little-endian
             if (crc8_xor(local, 9) != local[9]) { cnt_error++; break; }
             float v_mag, d_theta;
             memcpy(&v_mag,   &local[1], sizeof(float));
@@ -189,17 +232,10 @@ void DMA1_Stream3_IRQHandler(void)
 // ─────────────────────────────────────────────────────────────────────────────
 // spi_process — superloop stub
 // ─────────────────────────────────────────────────────────────────────────────
-void spi_process(void)
-{
-    // TODO: build TelemetryFrame from drive state, call spi_update_telem()
-}
+void spi_process(void) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// spi_update_telem — atomically swap TX DMA to freshly written telem slot
-//
-// Safe: M0AR write is 32-bit atomic on Cortex-M4. TX DMA reads M0AR only at
-// the start of each revolution (NDTR wrap). Update while DMA is mid-packet
-// so swap takes effect at next clean packet boundary.
+// spi_update_telem
 // ─────────────────────────────────────────────────────────────────────────────
 void spi_update_telem(const TelemetryFrame *frame)
 {
