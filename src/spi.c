@@ -1,6 +1,8 @@
 #include "spi.h"
 #include "protocol.h"
 #include "ringBuffer.h"
+#include "drive.h"
+#include "loops.h"
 #include "stm32f4xx.h"
 #include <string.h>
 
@@ -12,6 +14,10 @@ volatile uint8_t  dbg_rx0   = 0;
 
 static uint8_t rx_buf[32];
 static uint8_t tx_buf[32];
+
+// ── Telemetry double-buffer ───────────────────────────────────────────────────
+volatile TelemetryFrame telem_buf[2];
+volatile uint8_t        telem_write_idx = 0;
 
 static uint8_t crc8_xor(const uint8_t *buf, int len)
 {
@@ -43,7 +49,6 @@ void spi_init(void)
     GPIOB->AFR[1] |=  ((5u<<16)|(5u<<20)|(5u<<24)|(5u<<28));
     GPIOB->OSPEEDR|=  ((3u<<24)|(3u<<26)|(3u<<28)|(3u<<30));
 
-    // EXTI12 — PB12 falling edge → rearm RX DMA
     SYSCFG->EXTICR[3] &= ~(0xFu << 0);
     SYSCFG->EXTICR[3] |=  (1u   << 0);
     EXTI->FTSR |=  (1u << 12);
@@ -55,7 +60,6 @@ void spi_init(void)
     SPI2->CR1 = 0;
     SPI2->CR2 = SPI_CR2_RXDMAEN;
 
-    // DMA1 Stream3 Ch0: SPI2_RX normal mode
     DMA1_Stream3->CR &= ~DMA_SxCR_EN;
     while (DMA1_Stream3->CR & DMA_SxCR_EN);
     DMA1->LIFCR = DMA_LIFCR_CTCIF3 | DMA_LIFCR_CHTIF3 |
@@ -91,13 +95,20 @@ void spi_set_tx(const uint8_t *data)
     memcpy(tx_buf, data, 32);
 }
 
+void spi_update_telem(const TelemetryFrame *frame)
+{
+    uint8_t write_slot = telem_write_idx ^ 1u;
+    memcpy((void*)&telem_buf[write_slot], frame, sizeof(TelemetryFrame));
+    DMA1_Stream4->M0AR = (uint32_t)&telem_buf[write_slot];
+    telem_write_idx = write_slot;
+}
+
 void DMA1_Stream3_IRQHandler(void)
 {
     cnt_isr++;
     if (!(DMA1->LISR & DMA_LISR_TCIF3)) return;
     DMA1->LIFCR = DMA_LIFCR_CTCIF3;
 
-    // Discard partial transfers from EXTI rearm
     if (DMA1_Stream3->NDTR != 0) {
         rx_dma_rearm();
         return;
@@ -105,7 +116,6 @@ void DMA1_Stream3_IRQHandler(void)
 
     uint8_t local[32];
     memcpy(local, rx_buf, 32);
-
     rx_dma_rearm();
 
     dbg_rx0 = local[0];
@@ -121,15 +131,37 @@ void DMA1_Stream3_IRQHandler(void)
                 cnt_data++;
             }
             break;
+
         case SPI2_OP_BLOCK_HDR:
             if (crc8_xor(local, 3) != local[3]) { cnt_error++; break; }
+            first_sample_ready = 0;
             ring_reset();
+            samples_consumed = 0;
+            memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
+            drive_request_servo_on();
             break;
-        case SPI2_OP_TELEM_REQ:  break;
-        case SPI2_OP_READY_ACK:  break;
+
+        case SPI2_OP_OPEN_LOOP:
+            if (crc8_xor(local, 9) != local[9]) { cnt_error++; break; }
+            {
+                float v_mag, d_theta;
+                memcpy(&v_mag,   &local[1], sizeof(float));
+                memcpy(&d_theta, &local[5], sizeof(float));
+                drive_request_open_loop(v_mag, d_theta);
+            }
+            break;
+
         case SPI2_OP_STOP:
             if (crc8_xor(local, 1) != local[1]) { cnt_error++; break; }
+            drive_request_stop();
             break;
+
+        case SPI2_OP_TELEM_REQ:
+            break;
+
+        case SPI2_OP_READY_ACK:
+            break;
+
         default:
             cnt_error++;
             break;
