@@ -49,13 +49,13 @@ void spi_init(void)
     EXTI->FTSR |=  (1u << 12);
     EXTI->RTSR &= ~(1u << 12);
     EXTI->IMR  |=  (1u << 12);
-    NVIC_SetPriority(EXTI15_10_IRQn, 0);   // higher than DMA
+    NVIC_SetPriority(EXTI15_10_IRQn, 0);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 
     SPI2->CR1 = 0;
     SPI2->CR2 = SPI_CR2_RXDMAEN;
 
-    // DMA1 Stream3 Ch0: SPI2_RX circular
+    // DMA1 Stream3 Ch0: SPI2_RX normal mode
     DMA1_Stream3->CR &= ~DMA_SxCR_EN;
     while (DMA1_Stream3->CR & DMA_SxCR_EN);
     DMA1->LIFCR = DMA_LIFCR_CTCIF3 | DMA_LIFCR_CHTIF3 |
@@ -67,7 +67,6 @@ void spi_init(void)
         (0u << DMA_SxCR_CHSEL_Pos) |
         (0u << DMA_SxCR_DIR_Pos)   |
         DMA_SxCR_MINC              |
-        DMA_SxCR_CIRC              |
         DMA_SxCR_TCIE;
     DMA1_Stream3->CR |= DMA_SxCR_EN;
 
@@ -98,8 +97,16 @@ void DMA1_Stream3_IRQHandler(void)
     if (!(DMA1->LISR & DMA_LISR_TCIF3)) return;
     DMA1->LIFCR = DMA_LIFCR_CTCIF3;
 
+    // Discard partial transfers from EXTI rearm
+    if (DMA1_Stream3->NDTR != 0) {
+        rx_dma_rearm();
+        return;
+    }
+
     uint8_t local[32];
     memcpy(local, rx_buf, 32);
+
+    rx_dma_rearm();
 
     dbg_rx0 = local[0];
 
