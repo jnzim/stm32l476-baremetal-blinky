@@ -3,9 +3,9 @@
 #include "stm32f4xx.h"
 #include <string.h>
 
-volatile uint8_t  dbg_rx0   = 0;
-volatile uint32_t cnt_data  = 0;
-volatile uint32_t cnt_error = 0;
+extern volatile uint32_t cnt_data;
+extern volatile uint32_t cnt_error;
+extern volatile uint8_t  dbg_rx0;
 
 static uint8_t crc8_xor(const uint8_t *buf, int len)
 {
