@@ -11,6 +11,7 @@ volatile uint32_t cnt_error = 0;
 volatile uint32_t cnt_isr   = 0;
 volatile uint32_t cnt_cs    = 0;
 volatile uint8_t  dbg_rx0   = 0;
+volatile uint32_t cnt_block_hdr = 0;
 
 static uint8_t rx_buf[32];
 static uint8_t tx_buf[32];
@@ -137,6 +138,7 @@ void DMA1_Stream3_IRQHandler(void)
             first_sample_ready = 0;
             ring_reset();
             samples_consumed = 0;
+            cnt_block_hdr++;
             memset((void*)&telem_buf[1], 0, sizeof(TelemetryFrame));
             drive_request_servo_on();
             break;

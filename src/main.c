@@ -29,14 +29,17 @@ void SysTick_Handler(void)
             telem_buf[1].samples_consumed = ++samples_consumed;
             first_sample_ready            = 1;
         }
+
+        debug_ring_count = ring.count;
+
+        // Only manage READY after first sample consumed
+        if (first_sample_ready) {
+            if (ring.count <= 2048)
+                GPIOC->BSRR = READY_CLR_LOW;
+            else
+                GPIOC->BSRR = READY_SET_HIGH;
+        }
     }
-
-    debug_ring_count = ring.count;
-
-    if (ring.count <= 2048)
-        GPIOC->BSRR = READY_CLR_LOW;
-    else
-        GPIOC->BSRR = READY_SET_HIGH;
 }
 
 int main(void)
@@ -46,16 +49,18 @@ int main(void)
     clock_init();
     drive_init();
 
-    // READY pin — PC13 output
+    // READY pin — PC13 output, low at boot
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
     GPIOC->MODER  &= ~(3u << (READY_PIN * 2));
     GPIOC->MODER  |=  (1u << (READY_PIN * 2));
     GPIOC->OTYPER &= ~(1u << READY_PIN);
-    GPIOC->BSRR    =  READY_SET_HIGH;
+    GPIOC->BSRR    =  READY_CLR_LOW;   // not ready yet
 
     spi_init();
 
-    SysTick_Config(100000);  // 100MHz / 100000 = 1kHz
+    GPIOC->BSRR = READY_SET_HIGH;      // ready — Pi can send
+
+    SysTick_Config(100000);
 
     while (1) {}
 }
