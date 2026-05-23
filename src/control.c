@@ -1,5 +1,4 @@
 #include "control.h"
-#include "pwm.h"
 #include "config.h"
 
 void pi_init(PIState *s, float kp, float ki, float out_min, float out_max)
@@ -14,15 +13,11 @@ void pi_init(PIState *s, float kp, float ki, float out_min, float out_max)
 float pi_step(PIState *s, float error, float dt)
 {
     s->integrator += s->ki * error * dt;
-
     if (s->integrator > s->out_max) s->integrator = s->out_max;
     if (s->integrator < s->out_min) s->integrator = s->out_min;
-
     float out = s->kp * error + s->integrator;
-
     if (out > s->out_max) out = s->out_max;
     if (out < s->out_min) out = s->out_min;
-
     return out;
 }
 
@@ -34,11 +29,4 @@ void p_init(PState *s, float kp)
 float p_step(PState *s, float error)
 {
     return s->kp * error;
-}
-
-void open_loop_step(float *theta, float v_mag, float d_theta)
-{
-    *theta += d_theta;
-    if (*theta >= 2.0f * M_PI) *theta -= 2.0f * M_PI;
-    pwm_apply_vq(v_mag, 0.0f, *theta);
 }

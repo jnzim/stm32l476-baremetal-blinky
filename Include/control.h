@@ -17,8 +17,8 @@ typedef struct {
 
 void  pi_init(PIState *s, float kp, float ki, float out_min, float out_max);
 float pi_step(PIState *s, float error, float dt);
+
 void  p_init(PState *s, float kp);
 float p_step(PState *s, float error);
-void open_loop_step(float *theta, float v_mag, float d_theta);
 
 #endif

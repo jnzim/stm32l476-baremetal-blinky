@@ -82,17 +82,6 @@ void spi_init(void)
     SPI2->CR1 = SPI_CR1_SPE;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EXTI15_10_IRQHandler — SPI2 CS rising edge (transaction end), NVIC priority 0
-//
-// Fires when Pi de-asserts CS at the end of a 32-byte SPI packet.
-// Re-arms RX DMA for the next packet. Highest priority so the next
-// transaction can start without delay.
-//
-// Owns (writes):  DMA1 Stream3 control registers, cnt_cs
-// Reads:          EXTI->PR
-// Preempts:       everything
-// ─────────────────────────────────────────────────────────────────────────────
 void EXTI15_10_IRQHandler(void)
 {
     if (EXTI->PR & (1u << 12)) {
