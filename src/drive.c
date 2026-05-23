@@ -56,6 +56,13 @@ void drive_init(void)
     ol_theta      = 0.0f;
 }
 
+// Drive State
+bool drive_is_idle(void)      { return state == STATE_IDLE; }
+bool drive_is_open_loop(void) { return state == STATE_OPEN_LOOP; }
+bool drive_is_aligned(void)   { return state == STATE_ALIGN; }
+bool drive_is_servo_on(void)  { return state == STATE_SERVO_ON; }
+bool drive_is_faulted(void)   { return state == STATE_FAULT; }
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Request functions — called from DMA ISR or any ISR
 // ─────────────────────────────────────────────────────────────────────────────

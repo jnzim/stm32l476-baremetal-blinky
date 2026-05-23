@@ -18,7 +18,7 @@ void SysTick_Handler(void)
     tick_ms++;
     drive_update();
 
-    if (drive_get_state() == STATE_SERVO_ON)
+    if (drive_is_servo_on())
     {
         TrajSample s;
         if (ring_pop(&s))

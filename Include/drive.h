@@ -2,6 +2,7 @@
 #define DRIVE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef enum {
     STATE_IDLE      = 0,
@@ -16,6 +17,13 @@ void       drive_init(void);
 void       drive_update(void);
 DriveState drive_get_state(void);
 uint8_t    starting(void);
+
+// Status queries — read-only
+bool drive_is_idle(void);
+bool drive_is_open_loop(void);
+bool drive_is_aligned(void);
+bool drive_is_servo_on(void);
+bool drive_is_faulted(void);
 
 // Request functions — called from ISRs, flags consumed by drive_update()
 void drive_request_servo_on(void);
