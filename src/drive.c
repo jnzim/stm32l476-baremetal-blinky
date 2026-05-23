@@ -1,7 +1,7 @@
 // drive.c — servo drive state machine
 //
 // Architecture:
-//   drive_update() runs in SysTick at 1kHz — only place state transitions happen
+//   drive_sm_run() runs in SysTick at 1kHz — only place state transitions happen
 //   TIM1 ISR calls drive_get_state() to gate loop execution — reads only, never writes
 //   DMA ISR calls drive_request_*() — sets flags only
 //
@@ -24,7 +24,7 @@
 static DriveState state      = STATE_IDLE;
 static DriveState state_prev = STATE_IDLE;
 
-// ── Request flags — set by ISRs, cleared by drive_update() ───────────────────
+// ── Request flags — set by ISRs, cleared by drive_sm_run() ───────────────────
 static volatile uint8_t servo_on_req  = 0;
 static volatile uint8_t open_loop_req = 0;
 static volatile uint8_t stop_req      = 0;
@@ -118,9 +118,9 @@ void drive_align_rotor(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_update — call from SysTick at 1kHz
+// drive_sm_run — call from SysTick at 1kHz
 // ─────────────────────────────────────────────────────────────────────────────
-void drive_update(void)
+void drive_sm_run(void)
 {
     // fault takes priority from any state — latches immediately
     if (fault_req)

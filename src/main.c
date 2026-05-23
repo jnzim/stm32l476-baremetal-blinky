@@ -16,7 +16,7 @@ volatile uint32_t debug_ring_count = 0;
 void SysTick_Handler(void)
 {
     tick_ms++;
-    drive_update();
+    drive_sm_run();
 
     if (drive_is_servo_on())
     {
