@@ -82,6 +82,17 @@ void spi_init(void)
     SPI2->CR1 = SPI_CR1_SPE;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EXTI15_10_IRQHandler — SPI2 CS rising edge (transaction end), NVIC priority 0
+//
+// Fires when Pi de-asserts CS at the end of a 32-byte SPI packet.
+// Re-arms RX DMA for the next packet. Highest priority so the next
+// transaction can start without delay.
+//
+// Owns (writes):  DMA1 Stream3 control registers, cnt_cs
+// Reads:          EXTI->PR
+// Preempts:       everything
+// ─────────────────────────────────────────────────────────────────────────────
 void EXTI15_10_IRQHandler(void)
 {
     if (EXTI->PR & (1u << 12)) {
@@ -104,6 +115,21 @@ void spi_update_telem(const TelemetryFrame *frame)
     telem_write_idx = write_slot;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DMA1_Stream3_IRQHandler — SPI2 RX DMA transfer complete, NVIC priority 2
+//
+// Fires when 32 bytes have been clocked in from the Pi (one full packet).
+//
+// Owns (writes):  ring (push side), request flags (servo_on_req, etc.),
+//                 samples_consumed (zero on BLOCK_HDR), cnt_data, cnt_error
+// Reads:          rx_buf (DMA-filled, atomic snapshot via memcpy)
+// Preempts:       SysTick, anything at lower priority
+// Preempted by:   TIM1 (priority 1), EXTI15_10 (priority 0)
+//
+// Decode strategy: copy rx_buf to local, re-arm DMA immediately, then parse
+// the opcode. Minimizes the window where a new SPI transaction could
+// clobber rx_buf before this ISR finishes.
+// ─────────────────────────────────────────────────────────────────────────────
 void DMA1_Stream3_IRQHandler(void)
 {
     cnt_isr++;

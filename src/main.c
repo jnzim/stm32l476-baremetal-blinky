@@ -13,6 +13,23 @@
 volatile uint32_t tick_ms          = 0;
 volatile uint32_t debug_ring_count = 0;
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SysTick_Handler — 1 kHz, NVIC priority 15
+//
+// Owns (writes):  tick_ms, samples_consumed, first_sample_ready, telem_buf[]
+// Reads:          ring (via ring_pop), drive state (via drive_is_*)
+// Preempted by:   TIM1 (current loop, NVIC priority 1)
+//                 DMA1_Stream3 (SPI RX, NVIC priority 2)
+//                 EXTI15_10 (CS rising edge, NVIC priority 0)
+//
+// Run order (see SW_DESIGN.md for rationale):
+//   1. tick_ms++
+//   2. drive_sm_run()    — state transitions; must run before branching on state
+//   3. motion pop        — pop next trajectory sample if servo on
+//   4. ready_pin update  — READY signal to Pi based on ring count
+//   5. telem snapshot    — (later) capture state into telem_buf
+// ─────────────────────────────────────────────────────────────────────────────
 void SysTick_Handler(void)
 {
     tick_ms++;
@@ -23,22 +40,16 @@ void SysTick_Handler(void)
         TrajSample s;
         if (ring_pop(&s))
         {
-            telem_buf[1].pos_cmd          = s.pos_cmd;
-            telem_buf[1].vel_cmd          = (int16_t)s.vel_cmd;
-            telem_buf[1].timestamp_ms     = tick_ms;
-            telem_buf[1].samples_consumed = ++samples_consumed;
-            first_sample_ready            = 1;
+            samples_consumed++;
+            first_sample_ready = 1;
         }
+    }
 
-        debug_ring_count = ring.count;
+    debug_ring_count = ring.count;
 
-        // Only manage READY after first sample consumed
-        if (first_sample_ready) {
-            if (ring.count <= 2048)
-                GPIOC->BSRR = READY_CLR_LOW;
-            else
-                GPIOC->BSRR = READY_SET_HIGH;
-        }
+    if (first_sample_ready) {
+        if (ring.count <= 2048) GPIOC->BSRR = READY_CLR_LOW;
+        else                    GPIOC->BSRR = READY_SET_HIGH;
     }
 }
 
