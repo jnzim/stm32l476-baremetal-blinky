@@ -1,13 +1,18 @@
 // drive.c — servo drive state machine
 //
 // Architecture:
-//   drive_sm_run() runs in SysTick at 1kHz — only place state transitions happen
-//   TIM1 ISR calls drive_get_state() to gate loop execution — reads only, never writes
-//   DMA ISR calls drive_request_*() — sets flags only
+//   drive_sm_run() runs in SysTick at 1 kHz — only place state transitions happen.
+//   TIM1 ISR calls drive_get_state() to gate loop execution — reads only.
+//   DMA ISR calls drive_request_*() — sets flags only.
 //
-// State transitions happen in IDLE.
-// State initialization happens on entry in the destination state.
-// This keeps each state self-contained and consistent.
+// Initialization principle:
+//   State init runs at the *transition*, in the source state's transition
+//   path, BEFORE the new state is assigned. This matters because SysTick
+//   pops the ring after drive_sm_run() returns; if init were deferred to
+//   the entry tick of the destination state, it would wipe samples_consumed
+//   and first_sample_ready *after* SysTick had already advanced them on
+//   the transition tick, losing exactly one sample's count.
+//   (Bug recovered Nov 2026; see jz-min-streamer branch history.)
 
 #include "drive.h"
 #include "spi.h"
@@ -37,7 +42,7 @@ static volatile float ol_d_theta = 0.0f;
 // ── Open-loop angle accumulator ───────────────────────────────────────────────
 static float ol_theta = 0.0f;
 
-// ── entry_flag — set on state transition, cleared by drive_is_entry() ────────
+// ── entry_flag — set on state transition, cleared by starting() ──────────────
 extern PlantState plant;
 static uint8_t starting_flag = 0;
 
@@ -52,7 +57,7 @@ void drive_init(void)
     open_loop_req = 0;
     stop_req      = 0;
     fault_req     = 0;
-    starting_flag  = 0;
+    starting_flag = 0;
     ol_theta      = 0.0f;
 }
 
@@ -98,6 +103,7 @@ DriveState drive_get_state(void)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // starting_flag — returns 1 once on state entry, then 0
+// (Still used by OPEN_LOOP and ALIGN entry; SERVO_ON no longer uses it.)
 // ─────────────────────────────────────────────────────────────────────────────
 uint8_t starting(void)
 {
@@ -118,7 +124,7 @@ void drive_align_rotor(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drive_sm_run — call from SysTick at 1kHz
+// drive_sm_run — call from SysTick at 1 kHz
 // ─────────────────────────────────────────────────────────────────────────────
 void drive_sm_run(void)
 {
@@ -141,13 +147,28 @@ void drive_sm_run(void)
         {
             open_loop_req = 0;
             state         = STATE_OPEN_LOOP;
-            starting_flag    = 1;
+            starting_flag = 1;
         }
         else if (servo_on_req)
         {
             servo_on_req = 0;
-            state        = STATE_SERVO_ON;
-            starting_flag   = 1;
+
+            // ── SERVO_ON init — runs at transition, NOT on entry tick ──
+            // This MUST precede the state assignment below: SysTick will
+            // call ring_pop() immediately after drive_sm_run() returns
+            // this tick, and any reset of samples_consumed / first_sample_ready
+            // must happen before that pop, not after it.
+            loops_reset();
+#ifdef SIM_MODE
+            plant_init(&plant);
+#endif
+            ol_theta           = 0.0f;
+            first_sample_ready = 0;
+            samples_consumed   = 0;
+            pwm_enable();
+
+            state = STATE_SERVO_ON;
+            // No starting_flag for SERVO_ON — init is already complete.
         }
         break;
 
@@ -163,9 +184,9 @@ void drive_sm_run(void)
         open_loop_step(&ol_theta, ol_v_mag, ol_d_theta);
         if (stop_req)
         {
-            stop_req   = 0;
+            stop_req      = 0;
             pwm_disable();
-            state      = STATE_IDLE;
+            state         = STATE_IDLE;
             starting_flag = 1;
         }
         break;
@@ -181,21 +202,18 @@ void drive_sm_run(void)
         break;
 
     // ── SERVO_ON — closed-loop FOC with trajectory from Pi ───────────────────
+    // Init happens at transition in the IDLE case above, not here.
+    // This block only runs the running-state logic + the drain check.
     case STATE_SERVO_ON:
-        if (starting())
+        if (ring_count() == 0u && first_sample_ready && samples_consumed > 0)
         {
-            loops_reset();
-#ifdef SIM_MODE
-            plant_init(&plant);     // sim only — zero plant state on entry
-#endif
-            ol_theta           = 0.0f;
-            first_sample_ready = 0;
-            samples_consumed   = 0;
-            pwm_enable();
-        }
-        // Move complete — ring drained, return to IDLE
-        if (ring.count == 0 && first_sample_ready && samples_consumed > 0)
-        {
+            // Move complete — ring drained, return to IDLE.
+            // NOTE: this auto-exit still has a small end-of-stream race
+            // with the final DMA push (see jz-min-streamer notes). If the
+            // 8192/8192 result is stable with this fix, the auto-exit race
+            // is rare enough to address separately; otherwise replace this
+            // condition with an OP_STOP-driven exit or a samples_consumed
+            // == expected_count check using the BLOCK_HDR payload.
             pwm_disable();
             state              = STATE_IDLE;
             starting_flag      = 1;

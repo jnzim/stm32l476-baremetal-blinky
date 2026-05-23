@@ -44,12 +44,11 @@ void SysTick_Handler(void)
             first_sample_ready = 1;
         }
     }
-
-    debug_ring_count = ring.count;
-
+    uint32_t cnt = ring_count();    
+    debug_ring_count = cnt;
     if (first_sample_ready) {
-        if (ring.count <= 2048) GPIOC->BSRR = READY_CLR_LOW;
-        else                    GPIOC->BSRR = READY_SET_HIGH;
+    if (cnt <= 2048u) GPIOC->BSRR = READY_CLR_LOW;
+    else              GPIOC->BSRR = READY_SET_HIGH;
     }
 }
 
