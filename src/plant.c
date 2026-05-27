@@ -1,4 +1,5 @@
 #include "plant.h"
+#include "config.h"
 
 void plant_init(PlantState *s)
 {

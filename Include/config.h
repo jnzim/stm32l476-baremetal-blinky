@@ -9,6 +9,11 @@
 // ── Motor — AKM11E ───────────────────────────────────────────────────────────
 #define MOTOR_POLE_PAIRS    4u          // AKM11E — verify from datasheet
 
+// ── Encoder ───────────────────────────────────────────────────────────────────
+#define ENCODER_CPR         8192u                       // counts per revolution
+#define COUNTS_PER_REV      ((float)ENCODER_CPR)
+#define COUNTS_PER_RAD      (COUNTS_PER_REV / (2.0f * M_PI))
+
 // ── Bus voltage ───────────────────────────────────────────────────────────────
 #define V_BUS               12.0f       // volts — update to match bench supply
 

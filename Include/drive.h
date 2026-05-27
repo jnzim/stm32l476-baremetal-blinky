@@ -3,13 +3,14 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "protocol.h"
 
 typedef enum {
-    STATE_IDLE      = 0,
-    STATE_OPEN_LOOP = 1,
-    STATE_ALIGN     = 2,
-    STATE_SERVO_ON  = 3,
-    STATE_FAULT     = 4,
+    STATE_IDLE       = DRIVE_IDLE,
+    STATE_OPEN_LOOP  = DRIVE_OPEN_LOOP,
+    STATE_ALIGN      = DRIVE_ALIGN,
+    STATE_SERVO_ON   = DRIVE_SERVO_ON,
+    STATE_FAULT      = DRIVE_FAULT
 } DriveState;
 
 // Lifecycle
