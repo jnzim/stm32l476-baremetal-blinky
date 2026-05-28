@@ -5,7 +5,7 @@
 #include "drive.h"
 #include "loops.h"
 #include "clock.h"
-#include <stddef.h>
+
 #include <stdint.h>
 
 #define READY_PIN      13u
@@ -18,45 +18,84 @@ extern volatile uint32_t cnt_data;
 extern volatile uint32_t cnt_block_hdr;
 extern volatile uint32_t cnt_error;
 extern volatile uint8_t  ready_asserted;
-extern volatile TelemetryFrame telem_buf[2];
 
 volatile uint32_t tick_ms          = 0;
+volatile uint32_t cnt_systick      = 0;
 volatile uint32_t debug_ring_count = 0;
 
-static int32_t last_pos_cmd = 0;
-static int32_t last_vel_cmd = 0;
+volatile uint32_t cnt_ring_pop     = 0;
+volatile int32_t  debug_pop_pos    = 0;
+volatile int32_t  debug_pop_vel    = 0;
+
+volatile int32_t last_pos_cmd = 0;
+volatile int32_t last_vel_cmd = 0;
+
 
 void SysTick_Handler(void)
 {
+    cnt_systick++;
     tick_ms++;
-    // Pattern test mode — SysTick does not touch telem.
-    // telem_buf[1] is preloaded in main() with 01..20.
+
+    drive_sm_run();
+
+    if (drive_is_servo_on())
+    {
+        TrajSample s;
+
+        if (ring_pop(&s))
+        {
+            samples_consumed++;
+            cnt_ring_pop++;
+
+            first_sample_ready = 1;
+
+            last_pos_cmd  = s.pos_cmd;
+            last_vel_cmd  = s.vel_cmd;
+            debug_pop_pos = s.pos_cmd;
+            debug_pop_vel = s.vel_cmd;
+        }
+    }
+
+    debug_ring_count = ring_count();
+
+    if (debug_ring_count < RING_REFILL_THRESHOLD && !ready_asserted)
+    {
+        GPIOC->BSRR    = READY_CLR_LOW;
+        ready_asserted = 1;
+    }
+}
+
+static void debug_blink_fresh_firmware(void)
+{
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+
+    GPIOA->MODER &= ~(3u << 10);
+    GPIOA->MODER |=  (1u << 10);
+
+    for (int i = 0; i < 5; i++)
+    {
+        GPIOA->BSRR = (1u << 5);
+        for (volatile int d = 0; d < 200000; d++) {}
+
+        GPIOA->BSRR = (1u << 21);
+        for (volatile int d = 0; d < 200000; d++) {}
+    }
 }
 
 int main(void)
 {
     SCB->CPACR |= ((3UL << (10 * 2)) | (3UL << (11 * 2)));
 
-    // ── DEBUG: blink LD2 (PA5) 5x to prove fresh firmware is running ─────────
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-    GPIOA->MODER &= ~(3u << 10);
-    GPIOA->MODER |=  (1u << 10);
-    for (int i = 0; i < 5; i++) {
-        GPIOA->BSRR = (1u << 5);
-        for (volatile int d = 0; d < 200000; d++);
-        GPIOA->BSRR = (1u << 21);
-        for (volatile int d = 0; d < 200000; d++);
-    }
-
-    // ── DEBUG: preload telem_buf[1] with pattern 01..20 ──────────────────────
-    uint8_t *p = (uint8_t *)&telem_buf[1];
-    for (int i = 0; i < 32; i++) p[i] = (uint8_t)(i + 1);
+    debug_blink_fresh_firmware();
 
     clock_init();
     drive_init();
     spi_init();
 
-    SysTick_Config(SystemCoreClock / 1000u);
+    uint32_t systick_ok = SysTick_Config(SystemCoreClock / 1000u);
+    (void)systick_ok;
 
-    while (1) {}
+    while (1)
+    {
+    }
 }

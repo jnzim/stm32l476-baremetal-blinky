@@ -1,4 +1,4 @@
-// spi.c — SPI2 slave + DMA, STM32F411 bare metal
+// spi.c — SPI2 slave RX DMA, STM32F411 bare metal
 //
 // SPI2 pins:
 //   PB12 = NSS / CS from Pi, AF5 hardware NSS
@@ -7,16 +7,11 @@
 //   PB15 = MOSI, AF5
 //
 // DMA1 Stream3 Ch0 = SPI2_RX
-// DMA1 Stream4 Ch0 = SPI2_TX
+// DMA1 Stream4 Ch0 = SPI2_TX, currently unused
 //
-// Important:
-//   This version uses REAL SPI hardware NSS on PB12.
-//   No EXTI.
-//   No manual SPE toggling per frame.
-//   No DMA reset inside CS interrupt.
-//
-// Pi can still use manual GPIO CS.
-// The important thing is that GPIO CS line is physically wired to STM PB12.
+// Current baseline:
+//   Pi TX / MOSI -> STM SPI2 RX -> DMA -> local[] -> CRC -> ring_push()
+//   MISO telemetry is intentionally disabled/deferred.
 
 #include "spi.h"
 #include "protocol.h"
@@ -75,7 +70,7 @@ void spi_init(void)
 
     RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
 
-    // ── PC13 READY output, active-low, idle high ─────────────────────────────
+    // PC13 READY output, active-low, idle high.
     GPIOC->MODER   &= ~(3u << 26);
     GPIOC->MODER   |=  (1u << 26);
     GPIOC->OTYPER  &= ~(1u << 13);
@@ -84,42 +79,41 @@ void spi_init(void)
     GPIOC->PUPDR   &= ~(3u << 26);
     GPIOC->BSRR     =  (1u << 13);
 
-    // ── PB12/PB13/PB14/PB15 all AF5 SPI2 ────────────────────────────────────
-    // PB12 = hardware NSS. Let SPI peripheral handle CS.
+    // PB12/PB13/PB14/PB15 all AF5 SPI2.
     GPIOB->MODER &= ~((3u << 24) |
                       (3u << 26) |
                       (3u << 28) |
                       (3u << 30));
 
-    GPIOB->MODER |=  ((2u << 24) |   // PB12 AF = SPI2_NSS
-                      (2u << 26) |   // PB13 AF = SPI2_SCK
-                      (2u << 28) |   // PB14 AF = SPI2_MISO
-                      (2u << 30));   // PB15 AF = SPI2_MOSI
+    GPIOB->MODER |=  ((2u << 24) |   // PB12 NSS
+                      (2u << 26) |   // PB13 SCK
+                      (2u << 28) |   // PB14 MISO
+                      (2u << 30));   // PB15 MOSI
 
     GPIOB->AFR[1] &= ~((0xFu << 16) |
                        (0xFu << 20) |
                        (0xFu << 24) |
                        (0xFu << 28));
 
-    GPIOB->AFR[1] |=  ((5u << 16) |  // PB12 AF5 NSS
-                       (5u << 20) |  // PB13 AF5 SCK
-                       (5u << 24) |  // PB14 AF5 MISO
-                       (5u << 28));  // PB15 AF5 MOSI
+    GPIOB->AFR[1] |=  ((5u << 16) |  // PB12 SPI2_NSS
+                       (5u << 20) |  // PB13 SPI2_SCK
+                       (5u << 24) |  // PB14 SPI2_MISO
+                       (5u << 28));  // PB15 SPI2_MOSI
 
     GPIOB->OSPEEDR |= ((3u << 24) |
                        (3u << 26) |
                        (3u << 28) |
                        (3u << 30));
 
-    // NSS idle high. Pi drives this, but pull-up prevents floating at boot.
+    // Pull NSS high at boot so slave is deselected if Pi is not driving yet.
     GPIOB->PUPDR &= ~(3u << 24);
     GPIOB->PUPDR |=  (1u << 24);
 
-    // ── SPI2 off while configuring ───────────────────────────────────────────
+    // Disable SPI while configuring.
     SPI2->CR1 = 0;
     SPI2->CR2 = 0;
 
-    // ── Disable DMA streams before config ────────────────────────────────────
+    // Disable RX/TX DMA streams.
     DMA1_Stream3->CR &= ~DMA_SxCR_EN;
     while (DMA1_Stream3->CR & DMA_SxCR_EN) {}
 
@@ -128,27 +122,13 @@ void spi_init(void)
 
     spi2_dma_clear_flags();
 
-    // ── DMA1 Stream4 Ch0: SPI2_TX, telem_buf[1] → SPI2->DR, circular ────────
-    DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
-    DMA1_Stream4->M0AR = (uint32_t)&telem_buf[1];
-    DMA1_Stream4->NDTR = SPI_FRAME_BYTES;
-
-    DMA1_Stream4->CR =
-        (0u << DMA_SxCR_CHSEL_Pos) |
-        (1u << DMA_SxCR_DIR_Pos)   |   // memory-to-peripheral
-        DMA_SxCR_MINC              |
-        DMA_SxCR_CIRC;
-
-    DMA1_Stream4->CR |= DMA_SxCR_EN;
-
-    // ── DMA1 Stream3 Ch0: SPI2_RX, SPI2->DR → spi2_rx_buf, circular ─────────
+    // RX DMA only: SPI2->DR -> spi2_rx_buf.
     DMA1_Stream3->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream3->M0AR = (uint32_t)spi2_rx_buf;
     DMA1_Stream3->NDTR = SPI_FRAME_BYTES;
 
     DMA1_Stream3->CR =
         (0u << DMA_SxCR_CHSEL_Pos) |
-        (0u << DMA_SxCR_DIR_Pos)   |   // peripheral-to-memory
         DMA_SxCR_MINC              |
         DMA_SxCR_CIRC              |
         DMA_SxCR_TCIE;
@@ -158,44 +138,23 @@ void spi_init(void)
     NVIC_SetPriority(DMA1_Stream3_IRQn, 2);
     NVIC_EnableIRQ(DMA1_Stream3_IRQn);
 
-    // ── SPI2 slave, Mode 0, 8-bit, hardware NSS ──────────────────────────────
-    //
-    // Important:
-    //   SSM = 0, so PB12 hardware NSS is used.
-    //   SSI is irrelevant because software NSS is disabled.
-    //   MSTR = 0 by default, so this is slave mode.
-    //   CPOL = 0, CPHA = 0 by default, SPI mode 0.
-    //
-    // Do NOT set SPI_CR1_SSM here.
-    SPI2->CR1 = 0;
+    // SPI2 slave, Mode 1, hardware NSS.
+    // CPOL = 0, CPHA = 1.
+    // SSM = 0, MSTR = 0.
+    SPI2->CR1 = SPI_CR1_CPHA;
 
-    SPI2->CR2 = SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN;
+    // RX DMA only. MISO/telemetry deferred.
+    SPI2->CR2 = SPI_CR2_RXDMAEN;
 
     __DMB();
 
-    // Enable SPI once. Hardware NSS gates actual selection.
     SPI2->CR1 |= SPI_CR1_SPE;
 }
 
 void spi_update_telem(const TelemetryFrame *frame)
 {
-    /*
-     * For the current fixed-pattern / alignment test, TX DMA is fixed to
-     * telem_buf[1].
-     *
-     * Do NOT rewrite DMA1_Stream4->M0AR while the stream is running.
-     * That can create exactly the kind of garbage/bit-slip behavior we are
-     * trying to eliminate.
-     *
-     * Later, for real telemetry, we should either:
-     *   1. copy into telem_buf[1] only during a known safe window, or
-     *   2. stop TX DMA briefly before switching M0AR, or
-     *   3. use DBM double-buffer mode properly.
-     */
     memcpy((void *)&telem_buf[1], frame, sizeof(TelemetryFrame));
-
     __DMB();
-
     telem_write_idx = 1;
 }
 
@@ -205,14 +164,17 @@ void DMA1_Stream3_IRQHandler(void)
         return;
     }
 
+    uint8_t local[SPI_FRAME_BYTES];
+
+    // Copy completed 32-byte RX frame before parsing.
+    memcpy(local, (void *)spi2_rx_buf, SPI_FRAME_BYTES);
+
+    // Clear RX DMA flags.
     DMA1->LIFCR = DMA_LIFCR_CTCIF3  |
                   DMA_LIFCR_CHTIF3  |
                   DMA_LIFCR_CTEIF3  |
                   DMA_LIFCR_CDMEIF3 |
                   DMA_LIFCR_CFEIF3;
-
-    uint8_t local[SPI_FRAME_BYTES];
-    memcpy(local, (void *)spi2_rx_buf, SPI_FRAME_BYTES);
 
     uint8_t crc = 0;
 
@@ -229,7 +191,6 @@ void DMA1_Stream3_IRQHandler(void)
 
             {
                 TrajSample s;
-
                 memcpy(&s.pos_cmd, &local[1], sizeof(int32_t));
                 memcpy(&s.vel_cmd, &local[5], sizeof(int32_t));
 
