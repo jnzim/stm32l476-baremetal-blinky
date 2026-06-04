@@ -41,23 +41,25 @@ void SysTick_Handler(void)
     if (drive_is_servo_on())
     {
         TrajSample s;
-
         if (ring_pop(&s))
         {
             samples_consumed++;
             cnt_ring_pop++;
-
             first_sample_ready = 1;
-
             last_pos_cmd  = s.pos_cmd;
             last_vel_cmd  = s.vel_cmd;
             debug_pop_pos = s.pos_cmd;
             debug_pop_vel = s.vel_cmd;
+
+            telem_buf[1].pos_cmd          = s.pos_cmd;
+            telem_buf[1].vel_cmd          = s.vel_cmd;
+            telem_buf[1].timestamp_ms     = tick_ms;
+            telem_buf[1].samples_consumed = samples_consumed;
+            telem_buf[1].drive_state      = drive_get_state();
         }
     }
 
     debug_ring_count = ring_count();
-
     if (debug_ring_count < RING_REFILL_THRESHOLD && !ready_asserted)
     {
         GPIOC->BSRR    = READY_CLR_LOW;

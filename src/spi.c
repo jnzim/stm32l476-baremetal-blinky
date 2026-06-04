@@ -95,25 +95,22 @@ void spi_init(void)
                        (0xFu << 24) |
                        (0xFu << 28));
 
-    GPIOB->AFR[1] |=  ((5u << 16) |  // PB12 SPI2_NSS
-                       (5u << 20) |  // PB13 SPI2_SCK
-                       (5u << 24) |  // PB14 SPI2_MISO
-                       (5u << 28));  // PB15 SPI2_MOSI
+    GPIOB->AFR[1] |=  ((5u << 16) |
+                       (5u << 20) |
+                       (5u << 24) |
+                       (5u << 28));
 
     GPIOB->OSPEEDR |= ((3u << 24) |
                        (3u << 26) |
                        (3u << 28) |
                        (3u << 30));
 
-    // Pull NSS high at boot so slave is deselected if Pi is not driving yet.
     GPIOB->PUPDR &= ~(3u << 24);
     GPIOB->PUPDR |=  (1u << 24);
 
-    // Disable SPI while configuring.
     SPI2->CR1 = 0;
     SPI2->CR2 = 0;
 
-    // Disable RX/TX DMA streams.
     DMA1_Stream3->CR &= ~DMA_SxCR_EN;
     while (DMA1_Stream3->CR & DMA_SxCR_EN) {}
 
@@ -122,40 +119,63 @@ void spi_init(void)
 
     spi2_dma_clear_flags();
 
-    // RX DMA only: SPI2->DR -> spi2_rx_buf.
+    // RX DMA: SPI2->DR -> spi2_rx_buf (Stream3, Channel 0).
     DMA1_Stream3->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream3->M0AR = (uint32_t)spi2_rx_buf;
     DMA1_Stream3->NDTR = SPI_FRAME_BYTES;
-
-    DMA1_Stream3->CR =
+    DMA1_Stream3->CR   =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_MINC              |
         DMA_SxCR_CIRC              |
         DMA_SxCR_TCIE;
-
     DMA1_Stream3->CR |= DMA_SxCR_EN;
 
     NVIC_SetPriority(DMA1_Stream3_IRQn, 2);
     NVIC_EnableIRQ(DMA1_Stream3_IRQn);
 
-    // SPI2 slave, Mode 1, hardware NSS.
-    // CPOL = 0, CPHA = 1.
-    // SSM = 0, MSTR = 0.
-    SPI2->CR1 = SPI_CR1_CPHA;
+    // TX DMA: telem_buf[1] -> SPI2->DR (Stream4, Channel 0).
+    DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
+    DMA1_Stream4->M0AR = (uint32_t)&telem_buf[1];
+    DMA1_Stream4->NDTR = SPI_FRAME_BYTES;
+    DMA1_Stream4->CR   =
+        (0u << DMA_SxCR_CHSEL_Pos) |
+        DMA_SxCR_DIR_0             |
+        DMA_SxCR_MINC              |
+        DMA_SxCR_CIRC;
+    DMA1_Stream4->CR |= DMA_SxCR_EN;
 
-    // RX DMA only. MISO/telemetry deferred.
-    SPI2->CR2 = SPI_CR2_RXDMAEN;
+    // SPI2 slave, Mode 1, software NSS (SSM=1, SSI=0 — slave always selected).
+    // CPOL=0, CPHA=1, MSTR=0.
+    SPI2->CR1 = SPI_CR1_CPHA | SPI_CR1_SSM;
+
+    // RXDMAEN: SPI2 requests DMA each time it receives a byte (Stream3 services it).
+    // TXDMAEN: SPI2 requests DMA each time its transmit register is empty (Stream4 services it).
+    SPI2->CR2 = SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
 
     __DMB();
 
     SPI2->CR1 |= SPI_CR1_SPE;
+
+    // EXTI12 — PB12 CS falling edge -> rearm RX DMA for frame alignment.
+    // Armed after SPE so it cannot fire before SPI2 is ready.
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    SYSCFG->EXTICR[3] &= ~(0xFu << 0);
+    SYSCFG->EXTICR[3] |=  (0x1u << 0);
+    EXTI->FTSR |=  (1u << 12);
+    EXTI->RTSR &= ~(1u << 12);
+    EXTI->IMR  |=  (1u << 12);
+    EXTI->PR    =  (1u << 12);
+    NVIC_SetPriority(EXTI15_10_IRQn, 0);
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
+
 
 void spi_update_telem(const TelemetryFrame *frame)
 {
-    memcpy((void *)&telem_buf[1], frame, sizeof(TelemetryFrame));
-    __DMB();
-    telem_write_idx = 1;
+    uint8_t write_slot = telem_write_idx ^ 1u;
+    memcpy((void*)&telem_buf[write_slot], frame, sizeof(TelemetryFrame));
+    DMA1_Stream4->M0AR = (uint32_t)&telem_buf[write_slot];
+    telem_write_idx = write_slot;
 }
 
 void DMA1_Stream3_IRQHandler(void)
@@ -237,5 +257,17 @@ void DMA1_Stream3_IRQHandler(void)
         default:
             cnt_error++;
             break;
+    }
+}
+
+
+volatile uint32_t cnt_cs = 0;
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI->PR & (1u << 12))
+    {
+        EXTI->PR = (1u << 12);
+        cnt_cs++;
+        DMA1_Stream3->NDTR = SPI_FRAME_BYTES;
     }
 }
