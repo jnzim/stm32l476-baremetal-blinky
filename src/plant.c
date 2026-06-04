@@ -1,6 +1,8 @@
 #include "plant.h"
 #include "config.h"
 
+PlantState plant;
+
 void plant_init(PlantState *s)
 {
     s->vel          = 0.0f;

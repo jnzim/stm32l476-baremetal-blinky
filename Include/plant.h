@@ -23,5 +23,6 @@ typedef struct {
 
 void  plant_init(PlantState *s);
 void  plant_step(PlantState *s, float v_q, float dt);
+extern PlantState plant;
 
 #endif

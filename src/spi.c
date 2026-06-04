@@ -35,7 +35,9 @@ volatile uint8_t ready_asserted = 0;
 volatile TelemetryFrame telem_buf[2];
 volatile uint8_t        telem_write_idx = 0;
 
-static volatile uint8_t spi2_rx_buf[SPI_FRAME_BYTES];
+static volatile uint8_t     spi2_rx_buf[SPI_FRAME_BYTES];
+volatile        uint16_t    expected_samples;
+
 
 typedef char TelemetryFrame_must_be_32_bytes[
     (sizeof(TelemetryFrame) == SPI_FRAME_BYTES) ? 1 : -1
@@ -234,7 +236,7 @@ void DMA1_Stream3_IRQHandler(void)
                 cnt_error++;
                 break;
             }
-
+            expected_samples   = (uint16_t)(local[1] | ((uint16_t)local[2] << 8));
             first_sample_ready = 0;
             ring_reset();
             samples_consumed = 0;

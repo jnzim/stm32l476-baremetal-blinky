@@ -5,6 +5,8 @@
 #include "drive.h"
 #include "loops.h"
 #include "clock.h"
+#include "tim1.h"
+#include "plant.h"
 
 #include <stdint.h>
 
@@ -14,10 +16,11 @@
 
 #define RING_REFILL_THRESHOLD 2048u
 
-extern volatile uint32_t cnt_data;
-extern volatile uint32_t cnt_block_hdr;
-extern volatile uint32_t cnt_error;
-extern volatile uint8_t  ready_asserted;
+extern volatile uint32_t    cnt_data;
+extern volatile uint32_t    cnt_block_hdr;
+extern volatile uint32_t    cnt_error;
+extern volatile uint8_t     ready_asserted;
+
 
 volatile uint32_t tick_ms          = 0;
 volatile uint32_t cnt_systick      = 0;
@@ -30,6 +33,7 @@ volatile int32_t  debug_pop_vel    = 0;
 volatile int32_t last_pos_cmd = 0;
 volatile int32_t last_vel_cmd = 0;
 
+volatile uint32_t cnt_tim1 = 0;
 
 void SysTick_Handler(void)
 {
@@ -38,28 +42,8 @@ void SysTick_Handler(void)
 
     drive_sm_run();
 
-    if (drive_is_servo_on())
-    {
-        TrajSample s;
-        if (ring_pop(&s))
-        {
-            samples_consumed++;
-            cnt_ring_pop++;
-            first_sample_ready = 1;
-            last_pos_cmd  = s.pos_cmd;
-            last_vel_cmd  = s.vel_cmd;
-            debug_pop_pos = s.pos_cmd;
-            debug_pop_vel = s.vel_cmd;
-
-            telem_buf[1].pos_cmd          = s.pos_cmd;
-            telem_buf[1].vel_cmd          = s.vel_cmd;
-            telem_buf[1].timestamp_ms     = tick_ms;
-            telem_buf[1].samples_consumed = samples_consumed;
-            telem_buf[1].drive_state      = drive_get_state();
-        }
-    }
-
     debug_ring_count = ring_count();
+
     if (debug_ring_count < RING_REFILL_THRESHOLD && !ready_asserted)
     {
         GPIOC->BSRR    = READY_CLR_LOW;
@@ -67,6 +51,52 @@ void SysTick_Handler(void)
     }
 }
 
+
+
+static uint32_t   div_1k   = 0;
+
+void TIM1_UP_TIM10_IRQHandler(void)
+{
+    TIM1->SR = ~TIM_SR_UIF;
+    cnt_tim1++;
+
+    if (++div_1k >= 20u)
+    {
+        div_1k = 0;
+
+        if (drive_is_servo_on())
+        {
+            TrajSample s;
+
+            if (ring_pop(&s))
+            {
+                samples_consumed++;
+                cnt_ring_pop++;
+                first_sample_ready = 1;
+
+                float pos_err = (float)(s.pos_cmd - plant.pos_counts);
+                vel_cmd = p_step(&position_loop, pos_err);
+
+                telem_buf[1].pos_cmd          = s.pos_cmd;
+                telem_buf[1].pos_fbk          = plant.pos_counts;
+                telem_buf[1].vel_cmd          = (int32_t)vel_cmd;
+                telem_buf[1].timestamp_ms     = tick_ms;
+                telem_buf[1].samples_consumed = samples_consumed;
+                telem_buf[1].drive_state      = drive_get_state();
+            }
+
+            if (first_sample_ready)
+            {
+                float vel_err = vel_cmd - (float)plant.vel_counts;
+                iq_cmd = pi_step(&velocity_loop, vel_err, 1.0f / 1000.0f);
+
+                v_q_cmd = pi_step(&current_loop, iq_cmd - plant.i_q, 1.0f / 1000.0f);
+
+                plant_step(&plant, v_q_cmd, 1.0f / 1000.0f);
+            }
+        }
+    }
+}
 static void debug_blink_fresh_firmware(void)
 {
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
@@ -91,6 +121,7 @@ int main(void)
     debug_blink_fresh_firmware();
 
     clock_init();
+    tim1_init();
     drive_init();
     spi_init();
 

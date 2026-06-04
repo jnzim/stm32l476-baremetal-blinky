@@ -43,8 +43,9 @@ static volatile float ol_d_theta = 0.0f;
 static float ol_theta = 0.0f;
 
 // ── entry_flag — set on state transition, cleared by starting() ──────────────
-extern PlantState plant;
-static uint8_t starting_flag = 0;
+static uint8_t                  starting_flag = 0;
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_init
@@ -205,15 +206,10 @@ void drive_sm_run(void)
     // Init happens at transition in the IDLE case above, not here.
     // This block only runs the running-state logic + the drain check.
     case STATE_SERVO_ON:
-        if (ring_count() == 0u && first_sample_ready && samples_consumed > 0)
-        {
-            // Move complete — ring drained, return to IDLE.
-            // NOTE: this auto-exit still has a small end-of-stream race
-            // with the final DMA push (see jz-min-streamer notes). If the
-            // 8192/8192 result is stable with this fix, the auto-exit race
-            // is rare enough to address separately; otherwise replace this
-            // condition with an OP_STOP-driven exit or a samples_consumed
-            // == expected_count check using the BLOCK_HDR payload.
+        if ((expected_samples > 0u && samples_consumed >= expected_samples) ||
+            (expected_samples == 0u &&
+             ring_count() == 0u && first_sample_ready && samples_consumed > 0))
+        {   
             pwm_disable();
             state              = STATE_IDLE;
             starting_flag      = 1;
