@@ -8,6 +8,8 @@ set(MCU cortex-m4)
 set(LDSCRIPT ${CMAKE_SOURCE_DIR}/linker/memory.ld)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+
+
 add_executable(fw.elf
     src/main.c
     src/spi.c
@@ -24,6 +26,8 @@ add_executable(fw.elf
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )
+
+target_compile_definitions(fw.elf PRIVATE SIM_MODE)
 
 target_include_directories(fw.elf PRIVATE
     ${CMAKE_SOURCE_DIR}/include

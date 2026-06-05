@@ -7,6 +7,7 @@
 #include "clock.h"
 #include "tim1.h"
 #include "plant.h"
+#include "config.h"
 
 #include <stdint.h>
 
@@ -54,12 +55,29 @@ void SysTick_Handler(void)
 
 
 static uint32_t   div_1k   = 0;
+static uint32_t   div_5k   = 0;
 
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
     cnt_tim1++;
 
+    if (first_sample_ready)
+    {
+        /* current loop + plant: 20 kHz */
+        v_q_cmd = pi_step(&current_loop, iq_cmd - plant.i_q, 1.0f / 20000.0f);
+        plant_step(&plant, v_q_cmd, 1.0f / 20000.0f);
+
+        /* velocity loop: 5 kHz (every 4th tick) */
+        if (++div_5k >= 4u)
+        {
+            div_5k = 0;
+            float vel_err_rads = (vel_cmd - (float)plant.vel_counts) / COUNTS_PER_RAD;
+            iq_cmd = pi_step(&velocity_loop, vel_err_rads, 1.0f / 5000.0f);
+        }
+    }
+
+    /* position loop + pop: 1 kHz (every 20th tick) */
     if (++div_1k >= 20u)
     {
         div_1k = 0;
@@ -67,7 +85,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
         if (drive_is_servo_on())
         {
             TrajSample s;
-
             if (ring_pop(&s))
             {
                 samples_consumed++;
@@ -75,24 +92,19 @@ void TIM1_UP_TIM10_IRQHandler(void)
                 first_sample_ready = 1;
 
                 float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-                vel_cmd = p_step(&position_loop, pos_err);
+                // RAD/SEC
+                vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;             
 
                 telem_buf[1].pos_cmd          = s.pos_cmd;
                 telem_buf[1].pos_fbk          = plant.pos_counts;
                 telem_buf[1].vel_cmd          = (int32_t)vel_cmd;
+                telem_buf[1].vel_fbk          = plant.vel_counts;
                 telem_buf[1].timestamp_ms     = tick_ms;
-                telem_buf[1].samples_consumed = samples_consumed;
                 telem_buf[1].drive_state      = drive_get_state();
-            }
-
-            if (first_sample_ready)
-            {
-                float vel_err = vel_cmd - (float)plant.vel_counts;
-                iq_cmd = pi_step(&velocity_loop, vel_err, 1.0f / 1000.0f);
-
-                v_q_cmd = pi_step(&current_loop, iq_cmd - plant.i_q, 1.0f / 1000.0f);
-
-                plant_step(&plant, v_q_cmd, 1.0f / 1000.0f);
+                telem_buf[1].fault_flags      = 0;
+                telem_buf[1].samples_consumed = samples_consumed;
+                telem_buf[1].pos_err          = (int16_t)pos_err;
+                telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
             }
         }
     }
