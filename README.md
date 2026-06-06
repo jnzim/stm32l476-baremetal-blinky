@@ -4,7 +4,7 @@ Raspberry Pi side of a custom servo drive project. Generates trapezoidal motion 
 
 Companion firmware: [stm32-servo-drive](https://github.com/jnzim/stm32-servo-drive)
 
-![Position tracking](docs/tracking.png)
+![Position tracking](docs/run_000.png)
 
 ## Architecture
 
