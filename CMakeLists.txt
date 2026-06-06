@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_executable(fw.elf
     src/main.c
     src/spi.c
+    src/protocol.c
     src/encoder.c
     src/ringBuffer.c
     src/plant.c

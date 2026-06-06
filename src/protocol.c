@@ -1,0 +1,25 @@
+#include "protocol.h"
+#include <stdint.h>
+#include <stddef.h>
+
+uint16_t crc16_calc(const uint8_t* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++)
+    {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int j = 0; j < 8; j++)
+        {
+            crc <<= 1;
+            if (crc & 0x10000)
+                crc ^= CRC16_POLY;
+        }
+    }
+    return crc;
+}
+
+bool crc16_valid(const TrajSlot* s, size_t crc_len)
+{
+    uint16_t calc = crc16_calc((const uint8_t*)s, crc_len);
+    return (calc == s->crc16);
+}

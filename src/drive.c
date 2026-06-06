@@ -45,8 +45,7 @@ static float ol_theta = 0.0f;
 // ── entry_flag — set on state transition, cleared by starting() ──────────────
 static uint8_t                  starting_flag = 0;
 
-
-
+drive_t drive = {0}; 
 // ─────────────────────────────────────────────────────────────────────────────
 // drive_init
 // ─────────────────────────────────────────────────────────────────────────────

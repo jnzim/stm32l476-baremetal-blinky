@@ -23,7 +23,7 @@
 #include <string.h>
 #include <stdint.h>
 
-#define SPI_FRAME_BYTES SPI2_TRANSACTION_BYTES
+
 
 volatile uint32_t cnt_data      = 0;
 volatile uint32_t cnt_error     = 0;
@@ -35,17 +35,15 @@ volatile uint8_t ready_asserted = 0;
 volatile TelemetryFrame telem_buf[2];
 volatile uint8_t        telem_write_idx = 0;
 
-static volatile uint8_t     spi2_rx_buf[SPI_FRAME_BYTES];
+static volatile uint8_t     spi2_rx_buf[SPI2_TRANSACTION_BYTES];
 volatile        uint16_t    expected_samples;
 
 
 typedef char TelemetryFrame_must_be_32_bytes[
-    (sizeof(TelemetryFrame) == SPI_FRAME_BYTES) ? 1 : -1
+    (sizeof(TelemetryFrame) == SPI2_TRANSACTION_BYTES) ? 1 : -1
 ];
 
-typedef char TrajSample_must_be_8_bytes[
-    (sizeof(TrajSample) == 8u) ? 1 : -1
-];
+extern uint16_t crc16_calc(const uint8_t* data, size_t len);
 
 static void spi2_dma_clear_flags(void)
 {
@@ -124,7 +122,7 @@ void spi_init(void)
     // RX DMA: SPI2->DR -> spi2_rx_buf (Stream3, Channel 0).
     DMA1_Stream3->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream3->M0AR = (uint32_t)spi2_rx_buf;
-    DMA1_Stream3->NDTR = SPI_FRAME_BYTES;
+    DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;
     DMA1_Stream3->CR   =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_MINC              |
@@ -138,7 +136,7 @@ void spi_init(void)
     // TX DMA: telem_buf[1] -> SPI2->DR (Stream4, Channel 0).
     DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream4->M0AR = (uint32_t)&telem_buf[1];
-    DMA1_Stream4->NDTR = SPI_FRAME_BYTES;
+    DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
     DMA1_Stream4->CR   =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_DIR_0             |
@@ -180,16 +178,17 @@ void spi_update_telem(const TelemetryFrame *frame)
     telem_write_idx = write_slot;
 }
 
+
 void DMA1_Stream3_IRQHandler(void)
 {
     if (!(DMA1->LISR & DMA_LISR_TCIF3)) {
         return;
     }
 
-    uint8_t local[SPI_FRAME_BYTES];
+    uint8_t local[SPI2_TRANSACTION_BYTES];
 
     // Copy completed 32-byte RX frame before parsing.
-    memcpy(local, (void *)spi2_rx_buf, SPI_FRAME_BYTES);
+    memcpy(local, (void *)spi2_rx_buf, SPI2_TRANSACTION_BYTES);
 
     // Clear RX DMA flags.
     DMA1->LIFCR = DMA_LIFCR_CTCIF3  |
@@ -198,44 +197,41 @@ void DMA1_Stream3_IRQHandler(void)
                   DMA_LIFCR_CDMEIF3 |
                   DMA_LIFCR_CFEIF3;
 
-    uint8_t crc = 0;
+    uint8_t opcode = local[0];
 
-    switch (local[0]) {
+    switch (opcode) {
         case SPI2_OP_DATA:
-            for (int i = 0; i < 9; i++) {
-                crc ^= local[i];
-            }
-
-            if (crc != local[9]) {
+        {
+            TrajSlot *s = (TrajSlot *)local;
+            uint16_t crc_calc = crc16_calc(local, TRAJ_CRC_LEN);
+            uint16_t crc_recv = s->crc16;
+            
+            if (crc_calc != crc_recv) {
                 cnt_error++;
                 break;
             }
 
-            {
-                TrajSample s;
-                memcpy(&s.pos_cmd, &local[1], sizeof(int32_t));
-                memcpy(&s.vel_cmd, &local[5], sizeof(int32_t));
-
-                ring_push(&s);
-                cnt_data++;
-            }
+            ring_push(s);
+            cnt_data++;
 
             if (ready_asserted) {
                 GPIOC->BSRR    = (1u << 13);
                 ready_asserted = 0;
             }
-
-            break;
+        }
+        break;
 
         case SPI2_OP_BLOCK_HDR:
-            for (int i = 0; i < 3; i++) {
-                crc ^= local[i];
-            }
-
-            if (crc != local[3]) {
+        {
+            uint16_t crc_calc = crc16_calc(local, 14);
+            uint16_t crc_recv = (uint16_t)local[14] | ((uint16_t)local[15] << 8);
+            
+            if (crc_calc != crc_recv) 
+            {
                 cnt_error++;
                 break;
             }
+
             expected_samples   = (uint16_t)(local[1] | ((uint16_t)local[2] << 8));
             first_sample_ready = 0;
             ring_reset();
@@ -246,7 +242,8 @@ void DMA1_Stream3_IRQHandler(void)
             ready_asserted = 0;
 
             drive_request_servo_on();
-            break;
+        }
+        break;
 
         case SPI2_OP_TELEM_REQ:
             cnt_telem++;
@@ -263,6 +260,7 @@ void DMA1_Stream3_IRQHandler(void)
 }
 
 
+
 volatile uint32_t cnt_cs = 0;
 void EXTI15_10_IRQHandler(void)
 {
@@ -270,6 +268,6 @@ void EXTI15_10_IRQHandler(void)
     {
         EXTI->PR = (1u << 12);
         cnt_cs++;
-        DMA1_Stream3->NDTR = SPI_FRAME_BYTES;
+        DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;
     }
 }

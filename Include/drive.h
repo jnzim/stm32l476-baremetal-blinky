@@ -13,6 +13,16 @@ typedef enum {
     STATE_FAULT      = DRIVE_FAULT
 } DriveState;
 
+typedef struct 
+{
+    uint8_t  state;
+    uint8_t  fault_flags;
+    uint32_t samples_consumed;
+    // ... other motor/control fields
+} drive_t;
+
+extern drive_t drive; 
+
 // Lifecycle
 void       drive_init(void);
 void       drive_sm_run(void);
