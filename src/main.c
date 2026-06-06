@@ -93,10 +93,7 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
                 float pos_err = (float)(s.pos_cmd - plant.pos_counts);
                 vel_cmd = ((float)s.vel_cmd + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
-
-                //float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-                // RAD/SEC
-                //vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;             
+           
 
                 telem_buf[1].pos_cmd          = s.pos_cmd;
                 telem_buf[1].pos_fbk          = plant.pos_counts;
