@@ -92,18 +92,21 @@ void TIM1_UP_TIM10_IRQHandler(void)
                 first_sample_ready = 1;
 
                 float pos_err = (float)(s.pos_cmd - plant.pos_counts);
+                vel_cmd = ((float)s.vel_cmd + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
+
+                //float pos_err = (float)(s.pos_cmd - plant.pos_counts);
                 // RAD/SEC
-                vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;             
+                //vel_cmd = p_step(&position_loop, pos_err) / COUNTS_PER_RAD;             
 
                 telem_buf[1].pos_cmd          = s.pos_cmd;
                 telem_buf[1].pos_fbk          = plant.pos_counts;
-                telem_buf[1].vel_cmd          = (int32_t)vel_cmd;
+                telem_buf[1].vel_cmd          = (int32_t)s.vel_cmd;
                 telem_buf[1].vel_fbk          = plant.vel_counts;
                 telem_buf[1].timestamp_ms     = tick_ms;
                 telem_buf[1].drive_state      = drive_get_state();
                 telem_buf[1].fault_flags      = 0;
                 telem_buf[1].samples_consumed = samples_consumed;
-                telem_buf[1].pos_err          = (int16_t)pos_err;
+                telem_buf[1].iq_cmd           = (int16_t)(iq_cmd * 1000.0f);  // mA
                 telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
             }
         }
