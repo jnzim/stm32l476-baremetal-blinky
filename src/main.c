@@ -72,7 +72,7 @@ void TIM1_UP_TIM10_IRQHandler(void)
         if (++div_5k >= 4u)
         {
             div_5k = 0;
-            float vel_err_rads = (vel_cmd - (float)plant.vel_counts) / COUNTS_PER_RAD;
+            float vel_err_rads = vel_cmd - ((float)plant.vel_counts / COUNTS_PER_RAD);
             iq_cmd = pi_step(&velocity_loop, vel_err_rads, 1.0f / 5000.0f);
         }
     }

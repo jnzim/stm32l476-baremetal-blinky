@@ -169,7 +169,6 @@ void drive_sm_run(void)
             pwm_enable();
 
             state = STATE_SERVO_ON;
-            // No starting_flag for SERVO_ON — init is already complete.
         }
         break;
 
