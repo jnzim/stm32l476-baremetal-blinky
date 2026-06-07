@@ -24,61 +24,54 @@ void ring_reset(void)
 /* ringBuffer.c */
 static uint8_t traj_crc_error = 0;
 
-// void ring_push(const TrajSlot* s)
-// {
-//     uint32_t w = ring.write_idx;
-//     uint32_t r = ring.read_idx;
-    
-//     if ((w - r) >= RING_BUFFER_SIZE) return;
-    
-//     /* Push without validation */
-//     ring.buf[w & RING_MASK] = *s;
-//     __DMB();
-//     ring.write_idx = w + 1u;
-// }
 
+uint32_t cnt_push = 0;
+uint32_t cnt_pop = 0;
+uint32_t cnt_pop_fail = 0;
+uint32_t cnt_crc_fail = 0;
 
 void ring_push(const TrajSlot* s)
 {
-    static TrajSlot last_valid = {0};
     uint32_t w = ring.write_idx;
     uint32_t r = ring.read_idx;
-    
     if ((w - r) >= RING_BUFFER_SIZE) return;
     
-    TrajSlot to_push = *s;
-    
-    
-    if (s->opcode != SPI2_OP_DATA || !crc16_valid(s, TRAJ_CRC_LEN))
+    /* Validate opcode and CRC */
+    if (s->opcode != SPI2_OP_DATA)
     {
-        to_push = last_valid;
-        traj_crc_error = 1;
-    }
-    else
-    {
-        last_valid = *s;
-        traj_crc_error = 0;
+        cnt_crc_fail++;
+        return;
     }
     
+    uint16_t crc_calc = crc16_calc((uint8_t*)s, TRAJ_CRC_LEN);
+    if (crc_calc != s->crc16)
+    {
+        cnt_crc_fail++;
+        return;
+    }
     
-    last_valid = *s;
-    traj_crc_error = 0;
-    
-    ring.buf[w & RING_MASK] = to_push;
+    ring.buf[w & RING_MASK] = *s;
     __DMB();
     ring.write_idx = w + 1u;
+    cnt_push++;
 }
 
 //Single reader (SysTick, priority 15). 
+
 int ring_pop(TrajSlot* s)
 {
     uint32_t r = ring.read_idx;
-    uint32_t w = ring.write_idx;               
-    if (w == r) return 0;                       
-    __DMB();                                     
+    uint32_t w = ring.write_idx;
+    if (w == r)
+    {
+        cnt_pop_fail++;
+        return 0;
+    }
+    __DMB();
     *s = ring.buf[r & RING_MASK];
-    __DMB();                                     
+    __DMB();
     ring.read_idx = r + 1u;
+    cnt_pop++;
     return 1;
 }
 

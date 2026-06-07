@@ -262,12 +262,24 @@ void DMA1_Stream3_IRQHandler(void)
 
 
 volatile uint32_t cnt_cs = 0;
+// void EXTI15_10_IRQHandler(void)
+// {
+//     if (EXTI->PR & (1u << 12))
+//     {
+//         EXTI->PR = (1u << 12);
+//         EXTI->IMR &= ~(1u << 12);  /* disable retrigger */
+//         cnt_cs++;
+//         DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;
+//         EXTI->IMR |=  (1u << 12);  /* re-enable */
+//     }
+// }
+
 void EXTI15_10_IRQHandler(void)
 {
     if (EXTI->PR & (1u << 12))
     {
         EXTI->PR = (1u << 12);
         cnt_cs++;
-        DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;
+        // DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;  /* COMMENT OUT */
     }
 }

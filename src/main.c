@@ -63,7 +63,12 @@ void TIM1_UP_TIM10_IRQHandler(void)
     {
         div_1k = 0;
         
-        if (drive_is_servo_on())
+if (drive.samples_consumed >= 400 && drive.samples_consumed < 401)
+{
+    __NOP();  /* breakpoint: inspect ring at sample 400 */
+}
+
+        if (drive_is_servo_on() && drive.samples_consumed < expected_samples)
         {
             TrajSlot s;
             if (ring_pop(&s))
@@ -94,6 +99,11 @@ void TIM1_UP_TIM10_IRQHandler(void)
                 telem_buf[1].iq_cmd           = (int16_t)(iq_cmd * 1000.0f);
                 telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
             }
+        }
+        else if (drive.samples_consumed >= expected_samples)
+        {
+            vel_cmd = 0.0f;
+            //drive_request_servo_off();
         }
     }
 }

@@ -14,6 +14,9 @@ typedef struct {
 } RingBuffer;
 
 extern RingBuffer ring;
+extern uint32_t cnt_push;
+extern uint32_t cnt_pop;
+extern uint32_t cnt_pop_fail;
 
 void     ring_init(void);
 void     ring_reset(void);           /* writer-side only — see comment in .c */
