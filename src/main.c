@@ -85,8 +85,8 @@ if (drive.samples_consumed >= 400 && drive.samples_consumed < 401)
                 
                 /* Position loop: compute velocity command */
                 float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-                vel_cmd = ((float)s.vel_cmd + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
-                
+                vel_cmd = (((float)s.vel_cmd * 0.6) + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
+                //vel_cmd = ((float)0 + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
                 /* Populate telemetry frame */
                 telem_buf[1].pos_cmd          = s.pos_cmd;
                 telem_buf[1].pos_fbk          = plant.pos_counts;
