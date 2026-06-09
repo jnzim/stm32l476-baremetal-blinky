@@ -8,7 +8,7 @@ extern PIState velocity_loop;
 extern PState  position_loop;
 
 // ── Inter-loop setpoints ──────────────────────────────────────────────────────
-extern float          vel_cmd;
+extern float          vel_cmd_rad_sec;
 extern float          iq_cmd;
 extern volatile float v_q_cmd;
 

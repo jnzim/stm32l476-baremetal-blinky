@@ -39,6 +39,8 @@ void SysTick_Handler(void)
  * 1 kHz:  position loop + trajectory pop (every 20th tick)
  * =============================================================================
  */
+
+ int32_t profile_vel_cmd = 0;
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
@@ -53,8 +55,8 @@ void TIM1_UP_TIM10_IRQHandler(void)
         if (++div_5k >= 4u)
         {
             div_5k = 0;
-            float vel_err_rads = vel_cmd - ((float)plant.vel_counts / COUNTS_PER_RAD);
-            iq_cmd = pi_step(&velocity_loop, vel_err_rads, 1.0f / 5000.0f);
+            float vel_err_rad_sec = vel_cmd_rad_sec - (float)plant.vel_rad;
+            iq_cmd = pi_step(&velocity_loop, vel_err_rad_sec, 1.0f / 5000.0f);
         }
     }
     
@@ -63,10 +65,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
     {
         div_1k = 0;
         
-if (drive.samples_consumed >= 400 && drive.samples_consumed < 401)
-{
-    __NOP();  /* breakpoint: inspect ring at sample 400 */
-}
 
         if (drive_is_servo_on() && drive.samples_consumed < expected_samples)
         {
@@ -83,10 +81,13 @@ if (drive.samples_consumed >= 400 && drive.samples_consumed < 401)
                 drive.samples_consumed++;
                 first_sample_ready = 1;
                 
+                profile_vel_cmd  = s.vel_cmd;
                 /* Position loop: compute velocity command */
-                float pos_err = (float)(s.pos_cmd - plant.pos_counts);
-                vel_cmd = (((float)s.vel_cmd * 0.6) + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
-                //vel_cmd = ((float)0 + p_step(&position_loop, pos_err)) / COUNTS_PER_RAD;
+                float pos_err_cnt = (float)(s.pos_cmd - plant.pos_counts);
+                // Velocity in Radians/Sec
+                vel_cmd_rad_sec =   (p_step(&position_loop, pos_err_cnt) / COUNTS_PER_RAD) + 
+                                    (profile_vel_cmd / COUNTS_PER_RAD) * FF_GAIN;
+
                 /* Populate telemetry frame */
                 telem_buf[1].pos_cmd          = s.pos_cmd;
                 telem_buf[1].pos_fbk          = plant.pos_counts;
@@ -98,11 +99,12 @@ if (drive.samples_consumed >= 400 && drive.samples_consumed < 401)
                 telem_buf[1].samples_consumed = drive.samples_consumed;
                 telem_buf[1].iq_cmd           = (int16_t)(iq_cmd * 1000.0f);
                 telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
+                telem_buf[1].v_q_cmd          = (int16_t)(v_q_cmd * 1000.0f); // mV
             }
         }
         else if (drive.samples_consumed >= expected_samples)
         {
-            vel_cmd = 0.0f;
+            vel_cmd_rad_sec = 0.0f;
             //drive_request_servo_off();
         }
     }

@@ -15,8 +15,10 @@
 #define COUNTS_PER_RAD      (COUNTS_PER_REV / (2.0f * M_PI))
 
 // ── Bus voltage ───────────────────────────────────────────────────────────────
-#define V_BUS               12.0f       // volts — update to match bench supply
+#define V_BUS               48.0f       // volts — update to match bench supply
 
 // ── Alignment ─────────────────────────────────────────────────────────────────
 #define ALIGN_VOLTAGE       1.0f        // volts — low enough to align without overcurrent
 #define ALIGN_TIME_MS       500u        // ms — time to hold rotor at alignment angle
+
+#define FF_GAIN             0.75f        // vel FF gain
