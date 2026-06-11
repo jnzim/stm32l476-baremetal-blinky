@@ -4,8 +4,10 @@
 #include <stdint.h>
 #include "protocol.h"
 
-#define RING_BUFFER_SIZE 1024u  /* slots: 1024 × 32 bytes = 32 KB */
-#define RING_MASK 1023u  /* 1024 - 1 */
+
+#define RING_BUFFER_SIZE 2048u
+#define RING_MASK        2047u
+#define READY_THRESHOLD  (RING_BUFFER_SIZE / 2)  // 1024
 
 typedef struct {
     TrajSlot        buf[RING_BUFFER_SIZE];

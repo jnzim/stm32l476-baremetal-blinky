@@ -12,19 +12,22 @@
 
 
 
+
+
 /* =============================================================================
- * Timing and loop dividers
- * =============================================================================
- */
-volatile uint32_t tick_ms = 0;
-static uint32_t div_1k = 0;
-static uint32_t div_5k = 0;
+ * 
+ * =============================================================================*/
+volatile uint32_t   tick_ms             = 0;
+static  uint32_t    div_1k              = 0;
+static  uint32_t    div_5k              = 0;
+static  bool        move_in_progress    = false;
+static  uint32_t    prev_count          = 0;
+static  int32_t     profile_vel_cmd     = 0;
 
 /* =============================================================================
  * SysTick_Handler — 1 kHz
  * Calls drive state machine
- * =============================================================================
- */
+ * =============================================================================*/
 void SysTick_Handler(void)
 {
     tick_ms++;
@@ -37,10 +40,7 @@ void SysTick_Handler(void)
  * 20 kHz: current loop + plant
  * 5 kHz:  velocity loop (every 4th tick)
  * 1 kHz:  position loop + trajectory pop (every 20th tick)
- * =============================================================================
- */
-
- int32_t profile_vel_cmd = 0;
+ * =============================================================================*/
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
@@ -65,26 +65,38 @@ void TIM1_UP_TIM10_IRQHandler(void)
     {
         div_1k = 0;
         
+        /* =============================================================================
+        * Refill logic
+        * =============================================================================*/
+        uint32_t curr_count = ring_count();
+        if (prev_count == 0 && curr_count > 0)  { move_in_progress = true; }
+        if (curr_count == 0)                    { move_in_progress = false; }
+        // Flow control
+        if (move_in_progress && curr_count < READY_THRESHOLD) 
+        {
+            GPIOC->BSRR = (1u << READY_RING_REFILL);        // Set READY
+        }
+        else 
+        {
+            GPIOC->BSRR = (1u << (READY_RING_REFILL + 16)); // Clear READY
+        }
+        prev_count = curr_count;
 
+        /* =============================================================================
+        * Postion loop / telem logic
+        * =============================================================================*/
         if (drive_is_servo_on() && drive.samples_consumed < expected_samples)
         {
             TrajSlot s;
             if (ring_pop(&s))
             {
-                /* Check for CRC error flag from ring_push */
-                // if (ring_get_crc_error())
-                // {
-                //     drive.fault_flags |= FAULT_TRAJ_CRC;
-                // }
-                
                 /* Update state */
                 drive.samples_consumed++;
                 first_sample_ready = 1;
-                
-                profile_vel_cmd  = s.vel_cmd;
-                /* Position loop: compute velocity command */
+
+                // Run postion loop step
+                profile_vel_cmd =   s.vel_cmd;
                 float pos_err_cnt = (float)(s.pos_cmd - plant.pos_counts);
-                // Velocity in Radians/Sec
                 vel_cmd_rad_sec =   (p_step(&position_loop, pos_err_cnt) / COUNTS_PER_RAD) + 
                                     (profile_vel_cmd / COUNTS_PER_RAD) * FF_GAIN;
 
@@ -101,11 +113,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
                 telem_buf[1].i_q_fbk          = (int16_t)(plant.i_q * 1000.0f);
                 telem_buf[1].v_q_cmd          = (int16_t)(v_q_cmd * 1000.0f); // mV
             }
-        }
-        else if (drive.samples_consumed >= expected_samples)
-        {
-            vel_cmd_rad_sec = 0.0f;
-            //drive_request_servo_off();
         }
     }
 }

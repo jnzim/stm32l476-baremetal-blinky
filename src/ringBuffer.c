@@ -78,7 +78,7 @@ int ring_pop(TrajSlot* s)
 
 /* Slightly stale by definition; correct for READY-threshold and telemetry.
  * Monotonic uint32_t subtraction works across wrap as long as the live
- * difference is well below 2^31 — always true here (max 4096). */
+ * difference is well below BUFFER_SIZE. */
 uint32_t ring_count(void)
 {
     uint32_t w = ring.write_idx;

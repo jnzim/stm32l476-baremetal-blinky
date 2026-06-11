@@ -24,7 +24,6 @@
 #include <stdint.h>
 
 
-
 volatile uint32_t cnt_data      = 0;
 volatile uint32_t cnt_error     = 0;
 volatile uint32_t cnt_telem     = 0;
@@ -70,43 +69,43 @@ void spi_init(void)
 
     RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
 
-    // PC13 READY output, active-low, idle high.
-    GPIOC->MODER   &= ~(3u << 26);
-    GPIOC->MODER   |=  (1u << 26);
-    GPIOC->OTYPER  &= ~(1u << 13);
-    GPIOC->OSPEEDR &= ~(3u << 26);
-    GPIOC->OSPEEDR |=  (1u << 26);
-    GPIOC->PUPDR   &= ~(3u << 26);
-    GPIOC->BSRR     =  (1u << 13);
+    // PC13 READY_RING_REFILL output, active-low, idle high.
+    GPIOC->MODER   &= ~(3u << (READY_RING_REFILL * 2));
+    GPIOC->MODER   |=  (1u << (READY_RING_REFILL * 2));
+    GPIOC->OTYPER  &= ~(1u << READY_RING_REFILL);
+    GPIOC->OSPEEDR &= ~(3u << (READY_RING_REFILL * 2));
+    GPIOC->OSPEEDR |=  (1u << (READY_RING_REFILL * 2));
+    GPIOC->PUPDR   &= ~(3u << (READY_RING_REFILL * 2));
+    GPIOC->BSRR     =  (1u << READY_RING_REFILL);
 
     // PB12/PB13/PB14/PB15 all AF5 SPI2.
-    GPIOB->MODER &= ~((3u << 24) |
-                      (3u << 26) |
-                      (3u << 28) |
-                      (3u << 30));
+    GPIOB->MODER &= ~((3u << (SPI2_NSS_PIN * 2)) |
+                      (3u << (SPI2_SCK_PIN * 2)) |
+                      (3u << (SPI2_MISO_PIN * 2)) |
+                      (3u << (SPI2_MOSI_PIN * 2)));
 
-    GPIOB->MODER |=  ((2u << 24) |   // PB12 NSS
-                      (2u << 26) |   // PB13 SCK
-                      (2u << 28) |   // PB14 MISO
-                      (2u << 30));   // PB15 MOSI
+    GPIOB->MODER |=  ((2u << (SPI2_NSS_PIN * 2)) |   // PB12 NSS
+                      (2u << (SPI2_SCK_PIN * 2)) |   // PB13 SCK
+                      (2u << (SPI2_MISO_PIN * 2)) |  // PB14 MISO
+                      (2u << (SPI2_MOSI_PIN * 2)));  // PB15 MOSI
 
-    GPIOB->AFR[1] &= ~((0xFu << 16) |
-                       (0xFu << 20) |
-                       (0xFu << 24) |
-                       (0xFu << 28));
+    GPIOB->AFR[1] &= ~((0xFu << (SPI2_NSS_PIN * 4 - 32)) |
+                       (0xFu << (SPI2_SCK_PIN * 4 - 32)) |
+                       (0xFu << (SPI2_MISO_PIN * 4 - 32)) |
+                       (0xFu << (SPI2_MOSI_PIN * 4 - 32)));
 
-    GPIOB->AFR[1] |=  ((5u << 16) |
-                       (5u << 20) |
-                       (5u << 24) |
-                       (5u << 28));
+    GPIOB->AFR[1] |=  ((5u << (SPI2_NSS_PIN * 4 - 32)) |
+                       (5u << (SPI2_SCK_PIN * 4 - 32)) |
+                       (5u << (SPI2_MISO_PIN * 4 - 32)) |
+                       (5u << (SPI2_MOSI_PIN * 4 - 32)));
 
-    GPIOB->OSPEEDR |= ((3u << 24) |
-                       (3u << 26) |
-                       (3u << 28) |
-                       (3u << 30));
+    GPIOB->OSPEEDR |= ((3u << (SPI2_NSS_PIN * 2)) |
+                       (3u << (SPI2_SCK_PIN * 2)) |
+                       (3u << (SPI2_MISO_PIN * 2)) |
+                       (3u << (SPI2_MOSI_PIN * 2)));
 
-    GPIOB->PUPDR &= ~(3u << 24);
-    GPIOB->PUPDR |=  (1u << 24);
+    GPIOB->PUPDR &= ~(3u << (SPI2_NSS_PIN * 2));
+    GPIOB->PUPDR |=  (1u << (SPI2_NSS_PIN * 2));
 
     SPI2->CR1 = 0;
     SPI2->CR2 = 0;
@@ -161,10 +160,10 @@ void spi_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
     SYSCFG->EXTICR[3] &= ~(0xFu << 0);
     SYSCFG->EXTICR[3] |=  (0x1u << 0);
-    EXTI->FTSR |=  (1u << 12);
-    EXTI->RTSR &= ~(1u << 12);
-    EXTI->IMR  |=  (1u << 12);
-    EXTI->PR    =  (1u << 12);
+    EXTI->FTSR |=  (1u << SPI2_NSS_PIN);
+    EXTI->RTSR &= ~(1u << SPI2_NSS_PIN);
+    EXTI->IMR  |=  (1u << SPI2_NSS_PIN);
+    EXTI->PR    =  (1u << SPI2_NSS_PIN);
     NVIC_SetPriority(EXTI15_10_IRQn, 0);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
@@ -214,8 +213,9 @@ void DMA1_Stream3_IRQHandler(void)
             ring_push(s);
             cnt_data++;
 
-            if (ready_asserted) {
-                GPIOC->BSRR    = (1u << 13);
+            if (ready_asserted) 
+            {
+                GPIOC->BSRR    = (1u << READY_RING_REFILL);
                 ready_asserted = 0;
             }
         }
@@ -238,7 +238,7 @@ void DMA1_Stream3_IRQHandler(void)
             samples_consumed = 0;
             cnt_block_hdr++;
 
-            GPIOC->BSRR    = (1u << 13);
+            GPIOC->BSRR    = (1u << READY_RING_REFILL);
             ready_asserted = 0;
 
             drive_request_servo_on();
@@ -262,24 +262,12 @@ void DMA1_Stream3_IRQHandler(void)
 
 
 volatile uint32_t cnt_cs = 0;
-// void EXTI15_10_IRQHandler(void)
-// {
-//     if (EXTI->PR & (1u << 12))
-//     {
-//         EXTI->PR = (1u << 12);
-//         EXTI->IMR &= ~(1u << 12);  /* disable retrigger */
-//         cnt_cs++;
-//         DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;
-//         EXTI->IMR |=  (1u << 12);  /* re-enable */
-//     }
-// }
 
 void EXTI15_10_IRQHandler(void)
 {
-    if (EXTI->PR & (1u << 12))
+    if (EXTI->PR & (1u << SPI2_NSS_PIN))
     {
-        EXTI->PR = (1u << 12);
+        EXTI->PR = (1u << SPI2_NSS_PIN);
         cnt_cs++;
-        // DMA1_Stream3->NDTR = SPI2_TRANSACTION_BYTES;  /* COMMENT OUT */
     }
 }

@@ -21,4 +21,4 @@
 #define ALIGN_VOLTAGE       1.0f        // volts — low enough to align without overcurrent
 #define ALIGN_TIME_MS       500u        // ms — time to hold rotor at alignment angle
 
-#define FF_GAIN             0.75f        // vel FF gain
+#define FF_GAIN             0.95f        // vel FF gain~

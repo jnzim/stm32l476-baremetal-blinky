@@ -4,12 +4,14 @@
 #include <stdint.h>
 #include "protocol.h"
 
-#define PLANT_KT 0.06f        // Nm/A — corrected from datasheet
-#define PLANT_KE 0.0618f      // V/(rad/s) — should equal KT for DC motor
-#define PLANT_R  3.9f         // ohm — verify from datasheet
-#define PLANT_L  0.002f       // H — from datasheet (2.0 mH, not 2.68)
-#define PLANT_J  1.7e-6f      // kg*m^2, plus load later
-#define PLANT_B  1e-4f        // N*m*s/rad — friction/damping (guessed)
+#define PLANT_KT 0.064f        // Nm/Arms — corrected from datasheet
+#define PLANT_KE 0.0391f      // 4.1 Vrms/Krpm -> V / (rad/Sec)
+#define PLANT_R  3.1f         // line-lind ohms 
+#define PLANT_L  0.00204f     // H 2.04mH
+#define PLANT_B  4.77e-6f     // 0.0005N / Krpm kg*m^2, plus load later
+#define PLANT_J   1.7e-6f    // 0.017 kg·cm² (rotor + encoder) 
+
+// 4.1 V/krpm * (1 / 1000) * 1 /2*pi
 
 
 
