@@ -26,6 +26,7 @@ uint16_t drv8353_transfer16(uint16_t tx);
 uint16_t drv8353_read_reg(uint8_t addr);
 uint16_t drv8353_write_reg(uint8_t addr, uint16_t data);
 
+bool drv8353_configure(void);
 void drv8353_clear_faults(void);
 Drv8353Status drv8353_read_status(void);
 bool drv8353_spi_self_test(void);

@@ -439,3 +439,62 @@ bool drv8353_write_read_test(void)
 
     return true;
 }
+
+// =============================================================================
+// Deliberate register configuration
+// =============================================================================
+//
+// Field encodings below are from the DRV8353 datasheet (SLVSDJ3) register
+// tables. IDRIVE/VDS_LVL codes: VERIFY against your datasheet revision's
+// tables once before first powered FET switching. Harmless until PWM wired.
+//
+// Configuration intent:
+//   0x02  3x PWM mode (INHx = PWM, INLx = per-phase enable)
+//   0x03  unlocked, IDRIVE HS 150 mA source / 300 mA sink (EVM-mandated max)
+//   0x04  CBC on, TDRIVE 4000 ns, IDRIVE LS 150/300 mA
+//   0x05  latched OCP for bring-up, 100 ns dead time, VDS at default 0.75 V
+//   0x06  bidirectional CSA, GAIN = 40 V/V  <-- i_q scaling reference
+//
+// Current scaling with this config:
+//   I_phase = (V_SOx - VREF/2) / (40 V/V * R_shunt)
+//   Read R_shunt off the EVM schematic (RSx) before trusting absolute amps.
+//   With 12-bit ADC @ 3.3 V: amps_per_count = 3.3/4096 / (40 * R_shunt)
+
+#define DRV_CFG_DRIVER_CONTROL   0x0020u  // PWM_MODE=01 (3x), all else 0
+#define DRV_CFG_GATE_DRIVE_HS    0x0333u  // LOCK=011, IDRIVEP=0011(150mA), IDRIVEN=0011(300mA)
+#define DRV_CFG_GATE_DRIVE_LS    0x0733u  // CBC=1, TDRIVE=11(4000ns), 150/300mA
+#define DRV_CFG_OCP_CONTROL      0x0119u  // TRETRY=0, DEAD_TIME=01(100ns), OCP_MODE=00(latched), OCP_DEG=01(4us), VDS_LVL=1001(0.75V)
+#define DRV_CFG_CSA_CONTROL      0x02C3u  // VREF_DIV=1, CSA_GAIN=11(40V/V), SEN_LVL=11
+
+bool drv8353_configure(void)
+{
+    // Order: gate drive + protection first, mode last.
+    static const struct { uint8_t addr; uint16_t value; } cfg[] = {
+        { DRV8353_REG_GATE_DRIVE_HS, DRV_CFG_GATE_DRIVE_HS },
+        { DRV8353_REG_GATE_DRIVE_LS, DRV_CFG_GATE_DRIVE_LS },
+        { DRV8353_REG_OCP_CONTROL,   DRV_CFG_OCP_CONTROL   },
+        { DRV8353_REG_CSA_CONTROL,   DRV_CFG_CSA_CONTROL   },
+        { DRV8353_REG_DRIVER_CONTROL, DRV_CFG_DRIVER_CONTROL },
+    };
+
+    bool ok = true;
+
+    for (uint32_t i = 0; i < (sizeof(cfg) / sizeof(cfg[0])); i++)
+    {
+        drv8353_write_reg(cfg[i].addr, cfg[i].value);
+
+        uint16_t rb = drv8353_read_reg(cfg[i].addr);
+
+        // CLR_FLT (0x02 bit 0) self-clears; mask it out of comparison.
+        uint16_t mask = (cfg[i].addr == DRV8353_REG_DRIVER_CONTROL)
+                            ? (DRV_DATA_MASK & ~DRV8353_CLR_FLT)
+                            : DRV_DATA_MASK;
+
+        if ((rb & mask) != (cfg[i].value & mask))
+        {
+            ok = false;   // keep going; caller inspects full picture
+        }
+    }
+
+    return ok;
+}

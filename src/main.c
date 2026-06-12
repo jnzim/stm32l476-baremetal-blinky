@@ -158,29 +158,8 @@ int main(void)
     // -------------------------------------------------------------------------
 
     drv8353_init();      // SPI1 + DRV GPIO + DRV awake for register access
-
-    // Known reset values — sanity check read path and alignment:
-    //   r3 = 0x3FF (Gate Drive HS: LOCK=011 unlocked, IDRIVE max)
-    //   r4 = 0x7FF (Gate Drive LS)
-    //   r5 = 0x159 (OCP Control)
-    //   r6 = 0x283 (CSA Control)
-    volatile uint16_t r3 = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_HS);
-    volatile uint16_t r4 = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_LS);
-    volatile uint16_t r5 = drv8353_read_reg(DRV8353_REG_OCP_CONTROL);
-    volatile uint16_t r6 = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
-
-    volatile Drv8353Status s0 = drv8353_read_status();
-
-    drv8353_clear_faults();
-
-    volatile bool wr_ok = drv8353_write_read_test();   // expect true
-
-    volatile Drv8353Status s1 = drv8353_read_status();
-
-    (void)r3; (void)r4; (void)r5; (void)r6;
-    (void)s0;
-    (void)wr_ok;
-    (void)s1;
+    volatile bool cfg_ok = drv8353_configure();   // expect true
+    (void)cfg_ok;
 
     /* Configure SysTick for 1 kHz */
     SysTick_Config(SystemCoreClock / 1000u);
