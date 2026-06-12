@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "config.h"
 #include "encoder.h"
+#include "drv8353.h"
 
 
 
@@ -131,15 +132,46 @@ int main(void)
     /* Enable FPU coprocessor */
     SCB->CPACR |= ((3UL << (10 * 2)) | (3UL << (11 * 2)));
 
-   /* Initialize subsystems */
+    /* Initialize core subsystems */
     clock_init();
-    tim1_init();
+
+    /*
+     * Optional but OK:
+     * Encoder and RPi SPI are independent of DRV SPI1.
+     */
     encoder_init();
-    drive_init();
     spi_init();
     ring_init();
 
-      /* Configure SysTick for 1 kHz */
+    // -------------------------------------------------------------------------
+    // DRV8353 SPI/register bring-up test
+    //
+    // Purpose:
+    //   Verify STM32 SPI1 can communicate with DRV8353.
+    //   Verify DRV status/fault registers can be read.
+    //   Verify faults can be cleared.
+    //   Verify one writable config register can be written/read/restored.
+    //
+    // Safety:
+    //   PWM is not wired yet.
+    //   TIM1/PWM bring-up is intentionally not part of this test.
+    // -------------------------------------------------------------------------
+
+    drv8353_init();      // SPI1 + DRV GPIO + DRV awake for register access
+
+    volatile Drv8353Status s0 = drv8353_read_status();
+
+    drv8353_clear_faults();
+
+    volatile bool wr_ok = drv8353_write_read_test();
+
+    volatile Drv8353Status s1 = drv8353_read_status();
+
+    (void)s0;
+    (void)wr_ok;
+    (void)s1;
+
+    /* Configure SysTick for 1 kHz */
     SysTick_Config(SystemCoreClock / 1000u);
 
     while (1)

@@ -24,6 +24,7 @@ add_executable(fw.elf
     src/tim1.c
     src/pwm.c
     src/plant.c
+    src/drv8353.c
     src/system_stm32f4xx.c
     startup/startup_stm32f446xx.s
 )
