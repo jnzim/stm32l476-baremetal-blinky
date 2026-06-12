@@ -105,11 +105,11 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
                 /* Populate telemetry frame */
                 telem_buf[1].pos_cmd          = s.pos_cmd;
-                //telem_buf[1].pos_fbk          = plant.pos_counts;
-                telem_buf[1].pos_fbk          = encoder.position;
+                telem_buf[1].pos_fbk          = plant.pos_counts;
+                //telem_buf[1].pos_fbk          = encoder.position;
                 telem_buf[1].vel_cmd          = (int32_t)s.vel_cmd;
                 telem_buf[1].vel_fbk          = plant.vel_counts;
-                telem_buf[1].vel_fbk          = encoder.velocity;;
+                //telem_buf[1].vel_fbk          = encoder.velocity;;
                 telem_buf[1].timestamp_ms     = tick_ms;
                 telem_buf[1].drive_state      = drive_get_state();
                 telem_buf[1].fault_flags      = drive.fault_flags;
@@ -122,24 +122,17 @@ void TIM1_UP_TIM10_IRQHandler(void)
     }
 }
 
-/* =============================================================================
- * main
- * =============================================================================
- */
 
 int main(void)
 {
     /* Enable FPU coprocessor */
     SCB->CPACR |= ((3UL << (10 * 2)) | (3UL << (11 * 2)));
 
-    /* Initialize core subsystems */
+    /* Initialize subsystems */
     clock_init();
-
-    /*
-     * Optional but OK:
-     * Encoder and RPi SPI are independent of DRV SPI1.
-     */
+    tim1_init();
     encoder_init();
+    drive_init();
     spi_init();
     ring_init();
 
@@ -152,6 +145,13 @@ int main(void)
     //   Verify faults can be cleared.
     //   Verify one writable config register can be written/read/restored.
     //
+    // Verified working configuration (June 2026 bring-up):
+    //   - nSCS on PC8 (CN10 pin 2)
+    //   - 4.7k external pull-up on MISO/SDO (open-drain) to 3.3 V
+    //   - SPI1 at /256 (~328 kHz) for breadboard harness
+    //   - LOW speed GPIO edges on SCK/MOSI/CS (high-speed edges rang on
+    //     the breadboard; DRV counted phantom clocks and discarded writes)
+    //
     // Safety:
     //   PWM is not wired yet.
     //   TIM1/PWM bring-up is intentionally not part of this test.
@@ -159,14 +159,25 @@ int main(void)
 
     drv8353_init();      // SPI1 + DRV GPIO + DRV awake for register access
 
+    // Known reset values — sanity check read path and alignment:
+    //   r3 = 0x3FF (Gate Drive HS: LOCK=011 unlocked, IDRIVE max)
+    //   r4 = 0x7FF (Gate Drive LS)
+    //   r5 = 0x159 (OCP Control)
+    //   r6 = 0x283 (CSA Control)
+    volatile uint16_t r3 = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_HS);
+    volatile uint16_t r4 = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_LS);
+    volatile uint16_t r5 = drv8353_read_reg(DRV8353_REG_OCP_CONTROL);
+    volatile uint16_t r6 = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
+
     volatile Drv8353Status s0 = drv8353_read_status();
 
     drv8353_clear_faults();
 
-    volatile bool wr_ok = drv8353_write_read_test();
+    volatile bool wr_ok = drv8353_write_read_test();   // expect true
 
     volatile Drv8353Status s1 = drv8353_read_status();
 
+    (void)r3; (void)r4; (void)r5; (void)r6;
     (void)s0;
     (void)wr_ok;
     (void)s1;
@@ -178,7 +189,6 @@ int main(void)
     {
         int32_t pos = encoder_get_position();
         int32_t vel = encoder_get_velocity();
-
         (void)pos;
         (void)vel;
     }

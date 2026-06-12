@@ -1,7 +1,7 @@
 // drv8353.c — DRV8353RS SPI driver
 // STM32F411 bare metal
 //
-// Uses board.h pin map:
+// Uses board_f411.h pin map:
 //
 // SPI1:
 //   PA5 = DRV SCK
@@ -9,7 +9,7 @@
 //   PA7 = DRV MOSI
 //
 // GPIO:
-//   PB6 = DRV nSCS
+//   PC8 = DRV nSCS   (moved from PB6 for LA probe access, CN10 pin 2)
 //   PB0 = DRV ENABLE
 //   PB1 = DRV nFAULT
 //
@@ -20,6 +20,8 @@
 //   bit 15     = R/W, 1 = read, 0 = write
 //   bits 14:11 = address
 //   bits 10:0  = data
+//
+//   Read data returns in bits 10:0 of the SAME frame (not pipelined).
 
 #include "drv8353.h"
 #include "board_f411.h"
@@ -32,7 +34,7 @@
 // GPIO mapping
 // =============================================================================
 
-#define DRV_CS_PORT        GPIOB
+#define DRV_CS_PORT        GPIOC
 #define DRV_CS_PIN         PIN_DRV_CS
 
 #define DRV_EN_PORT        GPIOB
@@ -62,16 +64,9 @@
 //
 // Watch these in debugger or export them through telemetry.
 //
-// Expected good stale-read behavior:
-//
-//   original             = old register value
-//   test_value           = modified register value
-//   readback_ignored     = maybe old value
-//   readback             = test_value
-//   restored_ignored     = maybe test_value
-//   restored             = original
-//
-// If readback and restored never change correctly, writes are not taking.
+// Note: DRV8353 reads are same-frame (not pipelined). The *_ignored values
+// should always equal their trusted counterparts. If they ever differ,
+// suspect a CS-edge or setup-timing problem in the transfer.
 
 volatile uint16_t g_drv_wr_original;
 volatile uint16_t g_drv_wr_test_value;
@@ -129,6 +124,7 @@ void drv8353_init(void)
 
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;   // PC8 = nSCS
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
 
     __DSB();
@@ -153,10 +149,13 @@ void drv8353_init(void)
                        (5u << (PIN_DRV_MISO * 4u)) |
                        (5u << (PIN_DRV_MOSI * 4u)));
 
-    // High speed for SPI pins.
-    GPIOA->OSPEEDR |= ((3u << (PIN_DRV_SCK  * 2u)) |
-                       (3u << (PIN_DRV_MISO * 2u)) |
-                       (3u << (PIN_DRV_MOSI * 2u)));
+    // LOW speed edges for SCK/MOSI — critical on breadboard/long jumpers.
+    // High-speed (ns) edges ring on unterminated wires; the DRV counts the
+    // ringing as extra SCLK edges and discards write frames (!=16 clocks).
+    // Low speed is ample for <=1 MHz bus rates. MISO is an input; N/A.
+    GPIOA->OSPEEDR &= ~((3u << (PIN_DRV_SCK  * 2u)) |
+                        (3u << (PIN_DRV_MISO * 2u)) |
+                        (3u << (PIN_DRV_MOSI * 2u)));
 
     // Push-pull outputs for SCK/MOSI. MISO setting does not matter as input.
     GPIOA->OTYPER &= ~(BIT(PIN_DRV_SCK) | BIT(PIN_DRV_MOSI));
@@ -167,15 +166,16 @@ void drv8353_init(void)
     GPIOA->PUPDR |=  (1u << (PIN_DRV_MISO * 2u));
 
     // -------------------------------------------------------------------------
-    // PB6 = DRV nSCS, manual chip select, idle high
+    // PC8 = DRV nSCS, manual chip select, idle high
     // -------------------------------------------------------------------------
 
-    GPIOB->MODER &= ~(3u << (DRV_CS_PIN * 2u));
-    GPIOB->MODER |=  (1u << (DRV_CS_PIN * 2u));
+    GPIOC->MODER &= ~(3u << (DRV_CS_PIN * 2u));
+    GPIOC->MODER |=  (1u << (DRV_CS_PIN * 2u));
 
-    GPIOB->OTYPER &= ~BIT(DRV_CS_PIN);
-    GPIOB->OSPEEDR |= (3u << (DRV_CS_PIN * 2u));
-    GPIOB->PUPDR &= ~(3u << (DRV_CS_PIN * 2u));
+    GPIOC->OTYPER &= ~BIT(DRV_CS_PIN);
+    // LOW speed — same ringing rationale as SCK/MOSI.
+    GPIOC->OSPEEDR &= ~(3u << (DRV_CS_PIN * 2u));
+    GPIOC->PUPDR &= ~(3u << (DRV_CS_PIN * 2u));
 
     drv_cs_high();
 
@@ -212,9 +212,10 @@ void drv8353_init(void)
     //   MSB first
     //
     // STM32F411 SPI1 is on APB2.
-    // Start slow and boring.
-    // BR = 101 means f_PCLK / 64.
-    // If APB2 = 84 MHz, SPI clock ≈ 1.3125 MHz.
+    // BR = 111 means f_PCLK / 256.
+    // If APB2 = 84 MHz, SPI clock ≈ 328 kHz.
+    // Conservative for breadboard + long jumpers + LA capacitance with
+    // 4.7k pull-up on open-drain SDO. Bump to /128 or /64 once verified.
     // -------------------------------------------------------------------------
 
     SPI1->CR1 = 0;
@@ -226,6 +227,7 @@ void drv8353_init(void)
         SPI_CR1_SSI  |     // internal NSS high
         SPI_CR1_CPHA |     // mode 1: CPHA=1, CPOL=0
         SPI_CR1_BR_2 |
+        SPI_CR1_BR_1 |
         SPI_CR1_BR_0;
 
     // 16-bit data frame.
@@ -260,7 +262,7 @@ uint16_t drv8353_transfer16(uint16_t tx)
     // SPI mode 1 with CPOL=0 gives idle-low clock.
     drv_cs_low();
 
-    // Generous setup delay.
+    // Setup delay (nSCS low to first SCLK edge).
     drv_delay_cycles(50);
 
     while ((SPI1->SR & SPI_SR_TXE) == 0u)
@@ -275,16 +277,17 @@ uint16_t drv8353_transfer16(uint16_t tx)
 
     rx = *((volatile uint16_t *)&SPI1->DR);
 
+    // Critical: wait for the frame to fully clock out before raising CS.
     while ((SPI1->SR & SPI_SR_BSY) != 0u)
     {
     }
 
-    // Small hold delay before CS high.
+    // Hold delay before CS high.
     drv_delay_cycles(50);
 
     drv_cs_high();
 
-    // nSCS high time between words.
+    // nSCS minimum high time between words (>= 400 ns).
     drv_delay_cycles(100);
 
     return rx;
@@ -406,18 +409,13 @@ bool drv8353_write_read_test(void)
     drv8353_write_reg(reg, test_value);
     drv_delay_cycles(1000);
 
-    // Double read after write:
-    // First read may be stale.
-    // Second read is the one we trust.
+    // Reads are same-frame on the DRV8353; these pairs should always match.
     readback_ignored = drv8353_read_reg(reg) & DRV_DATA_MASK;
     readback         = drv8353_read_reg(reg) & DRV_DATA_MASK;
 
     drv8353_write_reg(reg, original);
     drv_delay_cycles(1000);
 
-    // Double read after restore:
-    // First read may be stale.
-    // Second read is the one we trust.
     restored_ignored = drv8353_read_reg(reg) & DRV_DATA_MASK;
     restored         = drv8353_read_reg(reg) & DRV_DATA_MASK;
 
