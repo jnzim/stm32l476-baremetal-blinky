@@ -9,7 +9,7 @@
 #include "protocol.h"
 #include <stdint.h>
 #include "config.h"
-
+#include "encoder.h"
 
 
 
@@ -44,6 +44,8 @@ void SysTick_Handler(void)
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
+    encoder_update(tick_ms);
+
     
     if (first_sample_ready)
     {
@@ -102,9 +104,11 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
                 /* Populate telemetry frame */
                 telem_buf[1].pos_cmd          = s.pos_cmd;
-                telem_buf[1].pos_fbk          = plant.pos_counts;
+                //telem_buf[1].pos_fbk          = plant.pos_counts;
+                telem_buf[1].pos_fbk          = encoder.position;
                 telem_buf[1].vel_cmd          = (int32_t)s.vel_cmd;
                 telem_buf[1].vel_fbk          = plant.vel_counts;
+                telem_buf[1].vel_fbk          = encoder.velocity;;
                 telem_buf[1].timestamp_ms     = tick_ms;
                 telem_buf[1].drive_state      = drive_get_state();
                 telem_buf[1].fault_flags      = drive.fault_flags;
@@ -121,25 +125,29 @@ void TIM1_UP_TIM10_IRQHandler(void)
  * main
  * =============================================================================
  */
+
 int main(void)
 {
     /* Enable FPU coprocessor */
     SCB->CPACR |= ((3UL << (10 * 2)) | (3UL << (11 * 2)));
-    
-    /* Initialize subsystems */
+
+   /* Initialize subsystems */
     clock_init();
     tim1_init();
+    encoder_init();
     drive_init();
     spi_init();
     ring_init();
-    
-    /* Configure SysTick for 1 kHz */
+
+      /* Configure SysTick for 1 kHz */
     SysTick_Config(SystemCoreClock / 1000u);
-    
-    /* Main loop — all work happens in ISRs */
+
     while (1)
     {
+        int32_t pos = encoder_get_position();
+        int32_t vel = encoder_get_velocity();
+
+        (void)pos;
+        (void)vel;
     }
-    
-    return 0;
 }
