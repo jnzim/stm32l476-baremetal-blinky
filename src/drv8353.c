@@ -89,12 +89,12 @@ static inline void drv_cs_high(void)
     DRV_CS_PORT->BSRR = BIT(DRV_CS_PIN);
 }
 
-static inline void drv_enable_low(void)
+void drv_enable_low(void)
 {
     DRV_EN_PORT->BSRR = (uint32_t)BIT(DRV_EN_PIN) << 16;
 }
 
-static inline void drv_enable_high(void)
+void drv_enable_high(void)
 {
     DRV_EN_PORT->BSRR = BIT(DRV_EN_PIN);
 }

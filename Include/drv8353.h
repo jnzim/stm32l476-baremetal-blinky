@@ -32,6 +32,7 @@ Drv8353Status drv8353_read_status(void);
 bool drv8353_spi_self_test(void);
 bool drv8353_write_read_test(void);
 
-void drv8353_enable(bool enable);
+void drv_enable_low(void);
+void drv_enable_high(void);
 bool drv8353_fault_pin_ok(void);
 bool drv8353_fault_pin_active(void);

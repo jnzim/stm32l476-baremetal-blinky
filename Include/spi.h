@@ -2,11 +2,11 @@
 #include <stdint.h>
 #include "protocol.h"
 
-#define READY_RING_REFILL   13u
-#define SPI2_NSS_PIN        12u
-#define SPI2_SCK_PIN        13u
-#define SPI2_MISO_PIN       14u
-#define SPI2_MOSI_PIN       15u
+// #define READY_RING_REFILL   13u
+// #define SPI2_NSS_PIN        12u
+// #define SPI2_SCK_PIN        13u
+// #define SPI2_MISO_PIN       14u
+// #define SPI2_MOSI_PIN       15u
 
 
 void spi_init(void);

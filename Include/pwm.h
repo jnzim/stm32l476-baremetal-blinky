@@ -23,3 +23,4 @@ uint16_t volts_to_duty(float v);
 // v_d: d-axis voltage (0 unless field weakening)
 // theta: electrical rotor angle in radians (from encoder)
 void pwm_apply_vq(float v_q, float v_d, float theta);
+

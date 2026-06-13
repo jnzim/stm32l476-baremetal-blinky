@@ -11,6 +11,8 @@
 #include "config.h"
 #include "encoder.h"
 #include "drv8353.h"
+#include "board_f411.h"
+#include "pwm.h"
 
 
 
@@ -47,7 +49,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
     TIM1->SR = ~TIM_SR_UIF;
     encoder_update(tick_ms);
 
-    
     if (first_sample_ready)
     {
         /* 20 kHz: current loop + plant */
@@ -129,46 +130,23 @@ int main(void)
     SCB->CPACR |= ((3UL << (10 * 2)) | (3UL << (11 * 2)));
 
     /* Initialize subsystems */
-    clock_init();
-    tim1_init();
-    encoder_init();
-    drive_init();
-    spi_init();
-    ring_init();
-
-    // -------------------------------------------------------------------------
-    // DRV8353 SPI/register bring-up test
-    //
-    // Purpose:
-    //   Verify STM32 SPI1 can communicate with DRV8353.
-    //   Verify DRV status/fault registers can be read.
-    //   Verify faults can be cleared.
-    //   Verify one writable config register can be written/read/restored.
-    //
-    // Verified working configuration (June 2026 bring-up):
-    //   - nSCS on PC8 (CN10 pin 2)
-    //   - 4.7k external pull-up on MISO/SDO (open-drain) to 3.3 V
-    //   - SPI1 at /256 (~328 kHz) for breadboard harness
-    //   - LOW speed GPIO edges on SCK/MOSI/CS (high-speed edges rang on
-    //     the breadboard; DRV counted phantom clocks and discarded writes)
-    //
-    // Safety:
-    //   PWM is not wired yet.
-    //   TIM1/PWM bring-up is intentionally not part of this test.
-    // -------------------------------------------------------------------------
-
-    drv8353_init();      // SPI1 + DRV GPIO + DRV awake for register access
-    volatile bool cfg_ok = drv8353_configure();   // expect true
-    (void)cfg_ok;
+    clock_init();                   // 100MHz
+    tim1_init();                    // 20KHz controls loops throttled
+    encoder_init();                 // feedback
+    drive_init();                   // SW init = band name
+    spi_init();                     // RPI profile and telem
+    ring_init();                    // profile righ buffer
+    drv8353_init();                 // SPI1 + DRV GPIO + DRV awake for register access
+    volatile bool cfg_ok =  drv8353_configure();// FET driver setup
+    pwm_init();   
+    pwm_enable();    
+    drv_enable_high();
 
     /* Configure SysTick for 1 kHz */
     SysTick_Config(SystemCoreClock / 1000u);
 
     while (1)
     {
-        int32_t pos = encoder_get_position();
-        int32_t vel = encoder_get_velocity();
-        (void)pos;
-        (void)vel;
+        __WFI();   // sleep until next interrupt
     }
 }

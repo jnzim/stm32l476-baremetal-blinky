@@ -1,6 +1,6 @@
 // spi.c — SPI2 slave RX DMA, STM32F411 bare metal
 //
-// SPI2 pins:
+// SPI2 pins (from board_f411.h):
 //   PB12 = NSS / CS from Pi, AF5 hardware NSS
 //   PB13 = SCK, AF5
 //   PB14 = MISO, AF5
@@ -11,9 +11,10 @@
 //
 // Current baseline:
 //   Pi TX / MOSI -> STM SPI2 RX -> DMA -> local[] -> CRC -> ring_push()
-//   MISO telemetry is intentionally disabled/deferred.
+
 
 #include "spi.h"
+#include "board_f411.h"
 #include "protocol.h"
 #include "ringBuffer.h"
 #include "drive.h"
@@ -79,33 +80,33 @@ void spi_init(void)
     GPIOC->BSRR     =  (1u << READY_RING_REFILL);
 
     // PB12/PB13/PB14/PB15 all AF5 SPI2.
-    GPIOB->MODER &= ~((3u << (SPI2_NSS_PIN * 2)) |
-                      (3u << (SPI2_SCK_PIN * 2)) |
-                      (3u << (SPI2_MISO_PIN * 2)) |
-                      (3u << (SPI2_MOSI_PIN * 2)));
+    GPIOB->MODER &= ~((3u << (PIN_RPI_NSS * 2)) |
+                      (3u << (PIN_RPI_SCK * 2)) |
+                      (3u << (PIN_RPI_MISO * 2)) |
+                      (3u << (PIN_RPI_MOSI * 2)));
 
-    GPIOB->MODER |=  ((2u << (SPI2_NSS_PIN * 2)) |   // PB12 NSS
-                      (2u << (SPI2_SCK_PIN * 2)) |   // PB13 SCK
-                      (2u << (SPI2_MISO_PIN * 2)) |  // PB14 MISO
-                      (2u << (SPI2_MOSI_PIN * 2)));  // PB15 MOSI
+    GPIOB->MODER |=  ((2u << (PIN_RPI_NSS * 2)) |   // PB12 NSS
+                      (2u << (PIN_RPI_SCK * 2)) |   // PB13 SCK
+                      (2u << (PIN_RPI_MISO * 2)) |  // PB14 MISO
+                      (2u << (PIN_RPI_MOSI * 2)));  // PB15 MOSI
 
-    GPIOB->AFR[1] &= ~((0xFu << (SPI2_NSS_PIN * 4 - 32)) |
-                       (0xFu << (SPI2_SCK_PIN * 4 - 32)) |
-                       (0xFu << (SPI2_MISO_PIN * 4 - 32)) |
-                       (0xFu << (SPI2_MOSI_PIN * 4 - 32)));
+    GPIOB->AFR[1] &= ~((0xFu << (PIN_RPI_NSS * 4 - 32)) |
+                       (0xFu << (PIN_RPI_SCK * 4 - 32)) |
+                       (0xFu << (PIN_RPI_MISO * 4 - 32)) |
+                       (0xFu << (PIN_RPI_MOSI * 4 - 32)));
 
-    GPIOB->AFR[1] |=  ((5u << (SPI2_NSS_PIN * 4 - 32)) |
-                       (5u << (SPI2_SCK_PIN * 4 - 32)) |
-                       (5u << (SPI2_MISO_PIN * 4 - 32)) |
-                       (5u << (SPI2_MOSI_PIN * 4 - 32)));
+    GPIOB->AFR[1] |=  ((5u << (PIN_RPI_NSS * 4 - 32)) |
+                       (5u << (PIN_RPI_SCK * 4 - 32)) |
+                       (5u << (PIN_RPI_MISO * 4 - 32)) |
+                       (5u << (PIN_RPI_MOSI * 4 - 32)));
 
-    GPIOB->OSPEEDR |= ((3u << (SPI2_NSS_PIN * 2)) |
-                       (3u << (SPI2_SCK_PIN * 2)) |
-                       (3u << (SPI2_MISO_PIN * 2)) |
-                       (3u << (SPI2_MOSI_PIN * 2)));
+    GPIOB->OSPEEDR |= ((3u << (PIN_RPI_NSS * 2)) |
+                       (3u << (PIN_RPI_SCK * 2)) |
+                       (3u << (PIN_RPI_MISO * 2)) |
+                       (3u << (PIN_RPI_MOSI * 2)));
 
-    GPIOB->PUPDR &= ~(3u << (SPI2_NSS_PIN * 2));
-    GPIOB->PUPDR |=  (1u << (SPI2_NSS_PIN * 2));
+    GPIOB->PUPDR &= ~(3u << (PIN_RPI_NSS * 2));
+    GPIOB->PUPDR |=  (1u << (PIN_RPI_NSS * 2));
 
     SPI2->CR1 = 0;
     SPI2->CR2 = 0;
@@ -160,10 +161,10 @@ void spi_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
     SYSCFG->EXTICR[3] &= ~(0xFu << 0);
     SYSCFG->EXTICR[3] |=  (0x1u << 0);
-    EXTI->FTSR |=  (1u << SPI2_NSS_PIN);
-    EXTI->RTSR &= ~(1u << SPI2_NSS_PIN);
-    EXTI->IMR  |=  (1u << SPI2_NSS_PIN);
-    EXTI->PR    =  (1u << SPI2_NSS_PIN);
+    EXTI->FTSR |=  (1u << PIN_RPI_NSS);
+    EXTI->RTSR &= ~(1u << PIN_RPI_NSS);
+    EXTI->IMR  |=  (1u << PIN_RPI_NSS);
+    EXTI->PR    =  (1u << PIN_RPI_NSS);
     NVIC_SetPriority(EXTI15_10_IRQn, 0);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
@@ -265,9 +266,9 @@ volatile uint32_t cnt_cs = 0;
 
 void EXTI15_10_IRQHandler(void)
 {
-    if (EXTI->PR & (1u << SPI2_NSS_PIN))
+    if (EXTI->PR & (1u << PIN_RPI_NSS))
     {
-        EXTI->PR = (1u << SPI2_NSS_PIN);
+        EXTI->PR = (1u << PIN_RPI_NSS);
         cnt_cs++;
     }
 }
