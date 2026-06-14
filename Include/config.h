@@ -7,7 +7,7 @@
 #endif
 
 // ── Motor — AKM11E ───────────────────────────────────────────────────────────
-#define MOTOR_POLE_PAIRS    4u          // AKM11E — verify from datasheet
+#define MOTOR_POLE_PAIRS    3u          // AKM11E 
 
 // ── Encoder ───────────────────────────────────────────────────────────────────
 #define ENCODER_CPR         8192u                       // counts per revolution
