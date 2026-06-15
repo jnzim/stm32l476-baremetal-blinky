@@ -119,6 +119,7 @@ void SysTick_Handler(void)
     tick_ms++;
     if (!system_initialized) return;
     run_foc_commutation();
+    drive_sm_run();
 }
 
 
