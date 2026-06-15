@@ -19,26 +19,29 @@
 #include "board_f411.h"
 #include "pwm.h"
 
+//   @ 1 kHz  SysTick : 1000 ticks = 1.0 s
+//   @ 20 kHz TIM10   : 20000 ticks = 1.0 s  
+#define ALIGN_TICKS           1000u
+ 
+// Voltages (volts). Bench bring-up values.
+#define V_ALIGN               6.0f      // d-axis hold during align
+#define V_RUN                 3.0f      // q-axis run voltage
+#define ENC_DIR               (+1.0f)
+ 
 
-/* =============================================================================
- * Global system state
- * =============================================================================*/
+typedef enum {
+    FOC_STAGE_ALIGN = 0,
+    FOC_STAGE_RUN
+} FocStage;
+ 
+static FocStage foc_stage      = FOC_STAGE_ALIGN;
+static uint32_t foc_align_tick = 0;
+static int32_t  encoder_offset = 0;     // encoder count at electrical zero
+
+
 volatile uint32_t tick_ms = 0;
 volatile bool     system_initialized = false;
 
-
-/* =============================================================================
- * Original control / profile state
- *
- * Keep this scaffold alive because the project still needs:
- *   - RPi SPI profile loading
- *   - ring buffer flow control
- *   - telemetry frame population
- *   - old plant/profile debug path
- *
- * During the current open-loop FOC voltage-vector test, the motor command is
- * generated in SysTick_Handler().
- * =============================================================================*/
 static uint32_t div_1k = 0;
 static uint32_t div_5k = 0;
 
@@ -47,119 +50,79 @@ static uint32_t prev_count = 0;
 static int32_t  profile_vel_cmd = 0;
 
 
-/* =============================================================================
- * Open-loop FOC voltage-vector bring-up
- *
- * This is NOT closed-loop FOC yet.
- *
- * What this proves:
- *
- *   vq/vd command
- *      -> inverse Park
- *      -> inverse Clarke
- *      -> phase voltage commands
- *      -> PWM duty
- *      -> DRV8353
- *      -> motor rotation
- *
- * What this does NOT use yet:
- *   - encoder electrical angle
- *   - current feedback
- *   - id/iq current regulation
- *   - velocity loop
- *   - position loop
- *
- * Next real FOC step:
- *
- *      theta_mech = encoder_counts_to_rad(encoder.position);
- *      theta_elec = pole_pairs * theta_mech + encoder_offset;
- *
- * =============================================================================*/
-
 #define FOC_TWO_PI      6.28318530718f
 #define FOC_TEST_VQ     5.0f
 
-/*
- * Electrical radians per SysTick.
- *
- * SysTick = 1 kHz, so:
- *
- *   0.001 rad/tick = 1 rad/s electrical
- *   0.010 rad/tick = 10 rad/s electrical
- *
- * Negative sign reverses the rotating voltage vector.
- */
-#define FOC_THETA_STEP (0.2f)
 
-static float foc_theta_open_loop = 0.0f;
-
-
-/* =============================================================================
- * SysTick_Handler — 1 kHz open-loop FOC voltage-vector test
- *
- * For this bring-up stage, SysTick advances a fake electrical angle and applies
- * a fixed q-axis voltage vector.
- *
- * This is temporary. Once encoder offset/alignment works, the synthetic theta
- * ramp should be replaced by encoder-derived electrical angle.
- * =============================================================================*/
-void SysTick_Handler(void)
+// Electrical angle from encoder, referenced to the captured offset.
+static float foc_theta_from_encoder(void)
 {
-    tick_ms++;
-
-    if (!system_initialized)
-        return;
-
-    foc_theta_open_loop += FOC_THETA_STEP;
-
-    /*
-     * Wrap angle into [0, 2pi).
-     * Need both checks because FOC_THETA_STEP may be positive or negative.
-     */
-    if (foc_theta_open_loop >= FOC_TWO_PI)
-        foc_theta_open_loop -= FOC_TWO_PI;
-
-    if (foc_theta_open_loop < 0.0f)
-        foc_theta_open_loop += FOC_TWO_PI;
-
-    /*
-     * Open-loop FOC voltage synthesis.
-     *
-     * v_d = 0
-     * v_q = fixed test voltage
-     * theta = synthetic electrical angle ramp
-     */
-    pwm_apply_vq(FOC_TEST_VQ, 0.0f, foc_theta_open_loop);
+    int32_t raw = encoder_get_position() - encoder_offset;
+ 
+    float theta_mech = (float)raw * (FOC_TWO_PI / ENCODER_CPR);
+    float theta_elec = ENC_DIR * theta_mech * (float)MOTOR_POLE_PAIRS;
+ 
+    // wrap into [0, 2pi)
+    theta_elec = fmodf(theta_elec, FOC_TWO_PI);
+    if (theta_elec < 0.0f) theta_elec += FOC_TWO_PI;
+ 
+    return theta_elec;
 }
 
 
-/* =============================================================================
- * TIM1_UP_TIM10_IRQHandler — 20 kHz interrupt
- *
- * Existing project scaffold:
- *   - encoder update
- *   - simulated current / velocity / position loops
- *   - ring-buffer trajectory consumption
- *   - READY refill GPIO
- *   - telemetry population
- *
- * Important during current bring-up:
- *
- *   The real motor PWM output is currently commanded by SysTick_Handler()
- *   through pwm_apply_vq(FOC_TEST_VQ, 0, foc_theta_open_loop).
- *
- *   The old plant/profile loop below is kept for architecture continuity, but
- *   it should not directly write motor PWM during this open-loop FOC test.
- *
- * Later real FOC current-loop work should move here:
- *
- *   1. read phase currents
- *   2. Clarke transform
- *   3. Park transform using encoder-derived theta_elec
- *   4. run id/iq PI loops
- *   5. call pwm_apply_vq(v_q_cmd, v_d_cmd, theta_elec)
- *
- * =============================================================================*/
+// ── Call once per ISR tick. Make sure ALIGN_TICKS is consistant ────────────────────────
+void run_foc_commutation(void)
+{
+    switch (foc_stage)
+    {
+        case FOC_STAGE_ALIGN:
+        {
+            // Force the d-axis at electrical zero. Rotor pulls into alignment.
+            // v_q = 0, v_d = V_ALIGN, theta = 0.
+            pwm_apply_vq(0.0f, V_ALIGN, 0.0f);
+ 
+            if (++foc_align_tick >= ALIGN_TICKS)
+            {
+                // Rotor has settled at electrical zero. This encoder reading
+                // IS electrical zero. Capture it as the offset.
+                encoder_offset = encoder_get_position();
+                foc_stage      = FOC_STAGE_RUN;
+            }
+        }
+        break;
+ 
+        case FOC_STAGE_RUN:
+        {
+            // Commutate from real rotor position. The q-axis vector is, by
+            // construction of the inverse Park transform, 90 electrical degrees
+            // ahead of the rotor d-axis — so do NOT add another 90 here.
+            // If it locks instead of spinning, the offset is a quadrant off:
+            // adjust encoder_offset by +/- (ENCODER_CPR / POLE_PAIRS / 4).
+            float theta_elec = foc_theta_from_encoder();
+            pwm_apply_vq(V_RUN, 0.0f, theta_elec);
+        }
+        break;
+    }
+}
+ 
+// Optional: call to restart the align sequence (e.g. on re-enable).
+void foc_commutation_reset(void)
+{
+    foc_stage      = FOC_STAGE_ALIGN;
+    foc_align_tick = 0;
+    encoder_offset = 0;
+}
+ 
+
+void SysTick_Handler(void)
+{
+    tick_ms++;
+    if (!system_initialized) return;
+    run_foc_commutation();
+}
+
+
+
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
