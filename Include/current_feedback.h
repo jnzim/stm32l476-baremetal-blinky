@@ -1,22 +1,40 @@
-// current_feedback.h — 3-phase current sense via DRV8353RS shunt amplifiers
-//
-// PC0/ADC1_IN10 = ISENA, PC1/ADC1_IN11 = ISENB, PC2/ADC1_IN12 = ISENC
-// Shunt = 7 mΩ, Gain = 10 V/V, Zero = 1.65V = 2048 counts
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
-// Raw DMA buffer — inspect in debugger during bring-up
-// Should read ~2048 at rest (zero current)
+/*
+ * current_feedback.h
+ *
+ * Bring-up current feedback module.
+ *
+ * Current version:
+ *   - ADC1 scans PC0/PC1/PC2 continuously
+ *   - DMA2 Stream0 Channel0 fills current_adc_raw[3]
+ *   - zero-current offsets are calibrated with PWM disabled
+ *   - caller can read ia/ib/ic or transformed id/iq
+ *
+ * This is not yet final synchronized FOC sampling.
+ * Later, ADC triggering should be tied to TIM1 at a quiet PWM point.
+ */
+
 extern volatile uint16_t current_adc_raw[3];
 
-// Call after tim1_init() and pwm_init(), before calibrate
 void current_feedback_init(void);
-
-// Call before pwm_enable() — motor stationary, ~13 ms
 void current_feedback_calibrate(void);
 
-// Call from ISR after DMA poll — returns amps
-// ia + ib + ic should sum to ~0
-void current_feedback_get(float *ia, float *ib, float *ic);
+bool current_feedback_sample_ready(void);
+void current_feedback_clear_sample_ready(void);
+
+void current_feedback_get_phase_amps(float *ia, float *ib, float *ic);
+void current_feedback_get_dq(float theta, float *i_d, float *i_q);
+
+float current_feedback_get_offset_a(void);
+float current_feedback_get_offset_b(void);
+float current_feedback_get_offset_c(void);
+
+void current_feedback_update(void);
+bool current_feedback_sample_valid(void);
+uint32_t current_feedback_sample_count(void);
+uint32_t current_feedback_missed_count(void);

@@ -52,6 +52,25 @@ typedef struct __attribute__((packed)) {
     int16_t  v_q_cmd;
 } TelemetryFrame;
 
+typedef struct __attribute__((packed))
+{
+    uint32_t t;
+    int16_t ia_mA;
+    int16_t ib_mA;
+    int16_t ic_mA;
+    int16_t id_mA;
+    int16_t iq_mA;
+    int16_t vd_mV;
+    int16_t vq_mV;
+    int16_t theta_mrad;
+    uint16_t adc_a;
+    uint16_t adc_b;
+    uint16_t adc_c;
+    uint16_t flags;
+    uint16_t crc;
+    uint16_t pad;
+} SysIdSample;
+
 /* =============================================================================
  * TrajSlot — 32 bytes (fixed-size, DMA-aligned)
  *
