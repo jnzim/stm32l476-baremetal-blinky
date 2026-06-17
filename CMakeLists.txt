@@ -26,6 +26,7 @@ add_executable(fw.elf
     src/plant.c
     src/drv8353.c
     src/system_stm32f4xx.c
+    src/current_feedback.c
     startup/startup_stm32f446xx.s
 )
 

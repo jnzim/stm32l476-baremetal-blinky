@@ -182,6 +182,13 @@ void pwm_init(void)
     TIM1->BDTR = 0;
 
 
+    TIM1->EGR  = TIM_EGR_UG;    // force load ARR/PSC/RCR
+    TIM1->SR   = 0;              // clear flags
+    TIM1->DIER = TIM_DIER_UIE;  // enable update interrupt
+    NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
+    NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
+    TIM1->CR1 |= TIM_CR1_CEN;   // start counter — this line already exists
+
     // -------------------------------------------------------------------------
     // Start timer counter.
     //

@@ -18,6 +18,8 @@
 #include "drv8353.h"
 #include "board_f411.h"
 #include "pwm.h"
+#include "current_feedback.h"
+
 
 //   @ 1 kHz  SysTick : 1000 ticks = 1.0 s
 //   @ 20 kHz TIM10   : 20000 ticks = 1.0 s  
@@ -126,9 +128,16 @@ void SysTick_Handler(void)
 
 void TIM1_UP_TIM10_IRQHandler(void)
 {
+    
     TIM1->SR = ~TIM_SR_UIF;
-
+    if (!system_initialized) return;
     encoder_update(tick_ms);
+
+    while (!(DMA2->LISR & DMA_LISR_TCIF0));
+    DMA2->LIFCR = DMA_LIFCR_CTCIF0;
+    float ia, ib, ic;
+    current_feedback_get(&ia, &ib, &ic);
+    // watch these in debugger or route to telemetry
 
     if (first_sample_ready)
     {
@@ -268,7 +277,7 @@ int main(void)
      * Core board/peripheral initialization.
      */
     clock_init();       // 100 MHz system clock
-    tim1_init();        // TIM1 PWM / update interrupt base
+    //tim1_init();        // TIM1 PWM / update interrupt base
     encoder_init();     // quadrature encoder feedback
     drive_init();       // drive software state
     spi_init();         // RPi SPI transport
@@ -284,6 +293,8 @@ int main(void)
      * PWM output initialization.
      */
     pwm_init();
+    current_feedback_init();
+    current_feedback_calibrate();
     pwm_enable();
 
     /*
