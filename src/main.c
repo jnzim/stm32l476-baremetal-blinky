@@ -239,24 +239,12 @@ void SysTick_Handler(void)
     if (!system_initialized)
         return;
 
-    run_foc_commutation();
+  //  run_foc_commutation();
 
     drive_sm_run();
 }
 
 
-/* =============================================================================
- * TIM1_UP_TIM10_IRQHandler — TIM1 update interrupt
- *
- * Current state:
- *   - update encoder
- *   - non-blocking current feedback read
- *   - low-pass current feedback for telemetry display
- *   - keep old plant/profile/telemetry scaffold
- *
- * Important:
- *   Do not block waiting for DMA inside this ISR.
- * =============================================================================*/
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
@@ -264,117 +252,70 @@ void TIM1_UP_TIM10_IRQHandler(void)
     if (!system_initialized)
         return;
 
+    /*
+     * 20 kHz sysid ISR.
+     *
+     * Keep:
+     *   - encoder update
+     *   - voltage-mode FOC PWM command
+     *   - current feedback update
+     *   - SPI sysid publish
+     *
+     * Remove for now:
+     *   - trajectory ring
+     *   - plant simulation
+     *   - position/velocity loop scaffold
+     *   - old telemetry generation
+     */
+
     encoder_update(tick_ms);
 
     /*
-     * Non-blocking current feedback update.
-     *
-     * ADC/DMA is currently continuous/free-running.
-     * If a fresh 3-channel scan is available, consume it.
-     * If not, keep using previous measured values.
+     * Run the real PWM command here, not behind trajectory state.
+     * This keeps the motor/FOC free-running for sysid.
+     */
+    run_foc_commutation();
+
+    /*
+     * Update current feedback.
+     * Non-blocking: if no fresh sample, keep previous measured values.
      */
     current_feedback_update();
+
+    float theta = foc_theta_from_encoder();
+    uint16_t flags = 0;
+
     if (current_feedback_sample_valid())
     {
-        float theta = foc_theta_from_encoder();
-
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
         i_q_plot += 0.02f * (i_q_meas - i_q_plot);
         i_d_plot += 0.02f * (i_d_meas - i_d_plot);
+
+        flags |= 0x0001u;   // fresh ADC/current sample consumed
     }
 
     /*
-     * Existing simulated loop scaffold.
+     * Publish latest sysid sample every TIM1 tick.
      *
-     * This updates old plant/profile variables.
-     * It does not own the real motor PWM command during this bring-up state.
+     * RPi reads this as one packed SysIdSample:
+     *   t, ia, ib, ic, id, iq, vd, vq, theta, adc fields, flags
      */
-    if (first_sample_ready)
-    {
-        /*
-         * 20 kHz: simulated current loop + plant model
-         */
-        v_q_cmd = pi_step(&current_loop,
-                          iq_cmd - plant.i_q,
-                          1.0f / 20000.0f);
-
-        plant_step(&plant, v_q_cmd, 1.0f / 20000.0f);
-
-        /*
-         * 5 kHz: simulated velocity loop
-         */
-        if (++div_5k >= 4u)
-        {
-            div_5k = 0;
-            float vel_err_rad_sec = vel_cmd_rad_sec - (float)plant.vel_rad;
-            iq_cmd = pi_step(&velocity_loop,vel_err_rad_sec, 1.0f / 5000.0f);
-        }
-    }
-
-    /*
-     * 1 kHz: position loop + trajectory pop + telemetry
-     */
-    if (++div_1k >= 20u)
-    {
-        div_1k = 0;
-
-        /* ---------------------------------------------------------------------
-         * Refill logic
-         * ------------------------------------------------------------------ */
-
-        uint32_t curr_count = ring_count();
-
-        if ((prev_count == 0u) && (curr_count > 0u))                { move_in_progress = true; }
-        if (curr_count == 0u)                                       { move_in_progress = false;}
-        if (move_in_progress && (curr_count < READY_THRESHOLD))     { GPIOC->BSRR = (1u << READY_RING_REFILL); }
-        else                                                        { GPIOC->BSRR = (1u << (READY_RING_REFILL + 16u));}
-
-        prev_count = curr_count;
-
-        /* ---------------------------------------------------------------------
-         * Position loop / telemetry logic
-         * ------------------------------------------------------------------ */
-
-        if (drive_is_servo_on() && (drive.samples_consumed < expected_samples))
-        {
-            TrajSlot s;
-
-          
-            if (ring_pop(&s))
-            {
-                drive.samples_consumed++;
-                first_sample_ready = 1;
-            
-                /*
-                 * Keep the profile command values from the RPi.
-                 *
-                 * During this bring-up stage, these commands are used mainly for telemetry
-                 * and flow-control validation. They do not yet drive the real motor loop.
-                 */
-                profile_vel_cmd = s.vel_cmd;
-            
-                int32_t pos_fbk_real = encoder.position;
-                int32_t vel_fbk_real = encoder.velocity;
-                float pos_err_cnt   = (float)(s.pos_cmd - pos_fbk_real);
-                vel_cmd_rad_sec     = (p_step(&position_loop, pos_err_cnt) / COUNTS_PER_RAD) +
-                                        ((float)profile_vel_cmd / COUNTS_PER_RAD) * FF_GAIN;
-            
-                telem_buf[1].pos_cmd            = s.pos_cmd;
-                telem_buf[1].pos_fbk            = pos_fbk_real;          
-                telem_buf[1].vel_cmd            = (int32_t)s.vel_cmd;
-                telem_buf[1].vel_fbk            = vel_fbk_real;
-                telem_buf[1].timestamp_ms       = tick_ms;
-                telem_buf[1].drive_state        = drive_get_state();
-                telem_buf[1].fault_flags        = drive.fault_flags;
-                telem_buf[1].samples_consumed   = drive.samples_consumed;
-                telem_buf[1].iq_cmd             = 0;
-                telem_buf[1].i_q_fbk            = (int16_t)(i_q_plot * 1000.0f);
-                telem_buf[1].v_q_cmd            = (int16_t)(foc_vq_applied * 1000.0f);
-            }
-        }
-    }
+    spi_sysid_update_latest(
+        (int16_t)(ia_meas * 1000.0f),
+        (int16_t)(ib_meas * 1000.0f),
+        (int16_t)(ic_meas * 1000.0f),
+        (int16_t)(i_d_meas * 1000.0f),
+        (int16_t)(i_q_meas * 1000.0f),
+        (int16_t)(foc_vd_applied * 1000.0f),
+        (int16_t)(foc_vq_applied * 1000.0f),
+        (int16_t)(theta * 1000.0f),
+        0,
+        0,
+        0,
+        flags
+    );
 }
 
 
@@ -410,7 +351,7 @@ int main(void)
      *
      * PWM outputs remain disabled until pwm_enable().
      */
-    //pwm_init();
+    pwm_init();
     current_feedback_init();
 
     /*
