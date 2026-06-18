@@ -155,9 +155,13 @@ void pwm_init(void)
         TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1PE |
         TIM_CCMR1_OC2M_1 | TIM_CCMR1_OC2M_2 | TIM_CCMR1_OC2PE;
 
+    // TIM1->CCMR2 =
+    //     TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE |
+    //     TIM_CCMR2_OC4M_0 | TIM_CCMR2_OC4M_1;    // OC4M = 011 toggle mode
+
     TIM1->CCMR2 =
-        TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE |
-        TIM_CCMR2_OC4M_0 | TIM_CCMR2_OC4M_1;    // OC4M = 011 toggle mode
+    TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE |
+    TIM_CCMR2_OC4M_1 | TIM_CCMR2_OC4M_2;    /* OC4M = 110 PWM mode 1 */
 
 
     // -------------------------------------------------------------------------
@@ -173,8 +177,8 @@ void pwm_init(void)
     // TIM1 CH4 ADC trigger at PWM center
     // -------------------------------------------------------------------------
 
-    TIM1->CCR4 = PWM_CENTER;
-
+    //TIM1->CCR4 = PWM_CENTER;
+TIM1->CCR4 = 1u;
 
     // -------------------------------------------------------------------------
     // Enable CH1/CH2/CH3 PWM compare outputs and CH4 compare event.

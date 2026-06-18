@@ -21,6 +21,7 @@
 #include "current_feedback.h"
 
 
+
 /* =============================================================================
  * Alignment timing
  *
@@ -227,67 +228,29 @@ void foc_commutation_reset(void)
     foc_vd_applied = 0.0f;
 }
 
-
-/* =============================================================================
- * SysTick_Handler — 1 kHz
- *
- * Runs temporary voltage-mode FOC commutation test and drive state machine.
- * =============================================================================*/
-void SysTick_Handler(void)
-{
-    tick_ms++;
-
-    if (!system_initialized)
-        return;
-
-  //  run_foc_commutation();
-
-    drive_sm_run();
-}
-
-
 void TIM1_UP_TIM10_IRQHandler(void)
 {
-
-    tim1_isr_count++; 
+    tim1_isr_count++;
 
     TIM1->SR = ~TIM_SR_UIF;
 
     if (!system_initialized)
         return;
 
-    /*
-     * 20 kHz sysid ISR.
-     *
-     * Keep:
-     *   - encoder update
-     *   - voltage-mode FOC PWM command
-     *   - current feedback update
-     *   - SPI sysid publish
-     *
-     * Remove for now:
-     *   - trajectory ring
-     *   - plant simulation
-     *   - position/velocity loop scaffold
-     *   - old telemetry generation
-     */
+
+volatile uint32_t dbg_cr2  = ADC1->CR2;
+volatile uint32_t dbg_sr   = ADC1->SR;
+volatile uint32_t dbg_ccmr2 = TIM1->CCMR2;
+volatile uint32_t dbg_ccer  = TIM1->CCER;
+(void)dbg_cr2;
+(void)dbg_sr;
+(void)dbg_ccmr2;
+(void)dbg_ccer;
+
 
     encoder_update(tick_ms);
 
-    /*
-     * Run the real PWM command here, not behind trajectory state.
-     * This keeps the motor/FOC free-running for sysid.
-     */
     run_foc_commutation();
-
-    /*
-     * Update current feedback.
-     * Non-blocking: if no fresh sample, keep previous measured values.
-     */
-    for (volatile uint32_t d = 0u; d < 100u; d++)
-    {
-        __NOP();
-    }
 
     current_feedback_update();
 
@@ -298,10 +261,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
     {
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
 
-        /*
-         * Force two-shunt reconstruction here.
-         * C ADC channel is diagnostic only.
-         */
         ic_meas = -(ia_meas + ib_meas);
 
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
@@ -312,23 +271,17 @@ void TIM1_UP_TIM10_IRQHandler(void)
         flags |= 0x0001u;
     }
 
-    /*
-     * Publish latest sysid sample every TIM1 tick.
-     *
-     * RPi reads this as one packed SysIdSample:
-     *   t, ia, ib, ic, id, iq, vd, vq, theta, adc fields, flags
-     */
-    /* Pack at integer level so sum is exact by construction */
     int16_t ia_out = (int16_t)(ia_meas * 1000.0f);
     int16_t ib_out = (int16_t)(ib_meas * 1000.0f);
-    int16_t ic_out = -(ia_out + ib_out);          /* exact integer reconstruction */
-    /* Temporary: trap any frame where sum != 0 */
-    volatile int16_t sum_check = ia_out + ib_out + ic_out;
-    (void)sum_check;  /* breakpoint here, watch sum_check */
+    int16_t ic_out = -(ia_out + ib_out);
+
+    volatile uint32_t dbg_sample_count = current_feedback_sample_count();
+    (void)dbg_sample_count;
+
     spi_sysid_update_latest(
-        (int16_t)(ia_out),
-        (int16_t)(ib_out),
-        (int16_t)(ic_out),
+        ia_out,
+        ib_out,
+        ic_out,
         (int16_t)(i_d_meas * 1000.0f),
         (int16_t)(i_q_meas * 1000.0f),
         (int16_t)(foc_vd_applied * 1000.0f),
@@ -339,9 +292,9 @@ void TIM1_UP_TIM10_IRQHandler(void)
         current_adc_raw[2],
         flags
     );
-    volatile uint32_t dbg_ftsr_after_drv = EXTI->FTSR;
-(void)dbg_ftsr_after_drv; 
 }
+
+
 /* =============================================================================
  * main
  * =============================================================================*/

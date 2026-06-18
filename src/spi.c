@@ -1,11 +1,9 @@
 // spi.c — SPI2 slave TX/RX DMA sysid latest-sample bring-up
 //
-// Double-buffer fix:
-//   spi_tx_buf[2] holds two complete SysIdSample frames.
-//   TIM1 ISR writes to the inactive buffer (index ^ 1).
-//   EXTI12 (CS falling edge) snapshots the write index and
-//   rearms TX DMA to point at the just-completed buffer.
-//   DMA never reads a buffer while the ISR is writing it.
+// TX DMA is CIRC (circular) — loops over the last fully-written buffer.
+// TIM1 ISR writes to the inactive ping-pong buffer and flips the index.
+// CIRC picks up the new buffer on the next loop automatically.
+// No CS-synchronized rearm needed.
 
 #include "spi.h"
 #include "board_f411.h"
@@ -26,6 +24,7 @@ volatile uint32_t cnt_error     = 0;
 volatile uint32_t cnt_telem     = 0;
 volatile uint32_t cnt_block_hdr = 0;
 volatile uint32_t cnt_cs        = 0;
+volatile uint32_t cnt_tx_rearm  = 0;
 
 volatile uint8_t ready_asserted = 0;
 
@@ -44,14 +43,15 @@ static volatile uint8_t spi2_rx_buf[SPI2_TRANSACTION_BYTES];
 /*
  * Ping-pong TX buffers.
  *
- * spi_tx_buf[spi_tx_write_idx ^ 1] = buffer TIM1 ISR is currently writing.
- * spi_tx_buf[spi_tx_write_idx]     = buffer DMA is currently reading.
+ * TIM1 ISR writes to spi_tx_buf[spi_tx_write_idx ^ 1] (inactive buffer),
+ * then flips spi_tx_write_idx after __DMB().
  *
- * EXTI12 flips spi_tx_read_idx to match spi_tx_write_idx at CS falling edge,
- * then rearms TX DMA to point at that buffer for the new transaction.
+ * TX DMA runs CIRC over a flat 64-byte region covering both buffers.
+ * It continuously loops, always reading the most recently completed frame.
+ * Occasional mid-frame reads are acceptable for latest-sample telemetry.
  */
 static SysIdSample spi_tx_buf[2];
-static volatile uint8_t spi_tx_write_idx = 0;   /* index last fully written */
+static volatile uint8_t spi_tx_write_idx = 0;
 
 
 /* =============================================================================
@@ -96,8 +96,8 @@ static void spi2_dma_clear_flags(void)
  * Called from TIM1 ISR at 20 kHz.
  * Writes to the inactive buffer (index ^ 1).
  * __DMB() (Data Memory Barrier) ensures all field writes are visible
- * before the index flip — prevents the compiler or CPU from reordering
- * the index write ahead of the data writes.
+ * before the index flip.
+ * CIRC DMA picks up the new buffer on its next loop.
  * =============================================================================*/
 
 void spi_sysid_update_latest(int16_t ia_mA,
@@ -113,7 +113,7 @@ void spi_sysid_update_latest(int16_t ia_mA,
                              uint16_t adc_c,
                              uint16_t flags)
 {
-    uint8_t idx = spi_tx_write_idx ^ 1u;   /* inactive buffer */
+    uint8_t idx = spi_tx_write_idx ^ 1u;
     SysIdSample *s = &spi_tx_buf[idx];
 
     s->t          = sysid_seq++;
@@ -132,8 +132,8 @@ void spi_sysid_update_latest(int16_t ia_mA,
     s->crc        = 0;
     s->pad        = 0;
 
-    __DMB();                        /* all writes visible before index flip */
-    spi_tx_write_idx = idx;         /* publish: this buffer is now complete */
+    __DMB();
+    spi_tx_write_idx = idx;
 }
 
 
@@ -199,12 +199,7 @@ void spi_init(void)
 
     spi2_dma_clear_flags();
 
-    /*
-     * Boot sample in buf[0].
-     * flags = 0x1234 marks boot/fake data.
-     * spi_tx_write_idx starts at 0 so EXTI12 will hand buf[0] to DMA
-     * on the first CS edge.
-     */
+    /* Boot sample — flags=0x1234 marks pre-TIM1 data */
     spi_sysid_update_latest(100, 200, 300,
                             400, 500,
                             600, 700,
@@ -214,7 +209,7 @@ void spi_init(void)
 
     /*
      * RX DMA: Pi MOSI -> SPI2->DR -> spi2_rx_buf
-     * CIRC (circular) is fine for RX — we just count transactions.
+     * CIRC — just counts transactions.
      */
     DMA1_Stream3->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream3->M0AR = (uint32_t)spi2_rx_buf;
@@ -233,8 +228,19 @@ void spi_init(void)
     /*
      * TX DMA: spi_tx_buf[spi_tx_write_idx] -> SPI2->DR -> Pi MISO
      *
-     * No CIRC — each transaction is rearmed explicitly by EXTI12.
-     * M0AR is set here to buf[0] (boot sample) and updated each CS edge.
+     * CIRC over SPI2_TRANSACTION_BYTES (32 bytes).
+     * M0AR points at the active buffer; TIM1 ISR updates spi_tx_write_idx
+     * but CIRC loops regardless — Pi always reads the latest complete frame.
+     *
+     * Note: M0AR points at buf[0] at boot. The ISR will flip to buf[1]
+     * on the first write. CIRC does not update M0AR automatically —
+     * it loops over the same 32-byte region. This means both buffers
+     * share the CIRC window only if M0AR spans both. To keep it simple,
+     * point CIRC at the full 64-byte spi_tx_buf[] and let the ISR
+     * manage which half is current via spi_tx_write_idx.
+     *
+     * At 500kHz / 32 bytes = ~512µs per loop. TIM1 ISR at 20kHz updates
+     * every 50µs. Pi reads latest sample on each CS assertion.
      */
     DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[0];
@@ -242,7 +248,8 @@ void spi_init(void)
     DMA1_Stream4->CR   =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_DIR_0             |   /* memory -> peripheral */
-        DMA_SxCR_MINC;                 /* no CIRC — rearmed per transaction */
+        DMA_SxCR_MINC              |   /* walk through buffer */
+        DMA_SxCR_CIRC;                 /* loop continuously */
 
     DMA1_Stream4->CR |= DMA_SxCR_EN;
 
@@ -255,11 +262,11 @@ void spi_init(void)
 
     SPI2->CR1 |= SPI_CR1_SPE;
 
-    /* CS edge IRQ on PB12 / EXTI12, falling edge only */
+    /* CS edge IRQ on PB12 / EXTI12, falling edge — kept for cnt_cs counting */
     RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 
     SYSCFG->EXTICR[3] &= ~(0xFu << 0);
-    SYSCFG->EXTICR[3] |=  (0x1u << 0);   /* PB12 -> EXTI12 */
+    SYSCFG->EXTICR[3] |=  (0x1u << 0);
 
     EXTI->FTSR |=  (1u << PIN_RPI_NSS);
     EXTI->RTSR &= ~(1u << PIN_RPI_NSS);
@@ -268,8 +275,6 @@ void spi_init(void)
 
     NVIC_SetPriority(EXTI15_10_IRQn, 0);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
-
-
 }
 
 
@@ -285,9 +290,6 @@ void spi_update_telem(const TelemetryFrame *frame)
 
 /* =============================================================================
  * SPI RX complete IRQ (DMA1 Stream3)
- *
- * Fires after Pi clocks 32 bytes in.
- * Just counts transactions. TX is rearmed by EXTI12.
  * =============================================================================*/
 
 void DMA1_Stream3_IRQHandler(void)
@@ -307,46 +309,15 @@ void DMA1_Stream3_IRQHandler(void)
 
 
 /* =============================================================================
- * CS falling edge IRQ (EXTI12)
- *
- * Fires when Pi asserts CS (PB12 falls).
- * Snapshots spi_tx_write_idx and rearms TX DMA to point at that buffer.
- * This must happen before the first SCK edge, so EXTI12 stays at priority 0.
- *
- * Rearm sequence (mandatory order):
- *   1. Disable Stream4.
- *   2. Wait for EN to clear.
- *   3. Clear TX DMA flags.
- *   4. Set M0AR to the completed buffer.
- *   5. Reload NDTR (Number of Data items to Transfer).
- *   6. Re-enable Stream4.
+ * CS falling edge IRQ (EXTI12) — counting only, no rearm
  * =============================================================================*/
 
- volatile uint32_t cnt_tx_rearm = 0;
 void EXTI15_10_IRQHandler(void)
 {
-    
     if (!(EXTI->PR & (1u << PIN_RPI_NSS))) {
         return;
     }
-    cnt_tx_rearm++;
+
     EXTI->PR = (1u << PIN_RPI_NSS);
     cnt_cs++;
-
-    /* Snapshot the last fully-written buffer index */
-    uint8_t idx = spi_tx_write_idx;
-
-    /* Rearm TX DMA (DMA1 Stream4) */
-    DMA1_Stream4->CR &= ~DMA_SxCR_EN;
-    while (DMA1_Stream4->CR & DMA_SxCR_EN) {}
-
-    DMA1->HIFCR = DMA_HIFCR_CTCIF4  |
-                  DMA_HIFCR_CHTIF4  |
-                  DMA_HIFCR_CTEIF4  |
-                  DMA_HIFCR_CDMEIF4 |
-                  DMA_HIFCR_CFEIF4;
-
-    DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[idx];
-    DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
-    DMA1_Stream4->CR  |= DMA_SxCR_EN;
 }

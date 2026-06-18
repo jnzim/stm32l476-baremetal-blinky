@@ -13,20 +13,22 @@
 //   ADC reference = 3.3 V
 //   zero current is approximately VREF / 2
 //
-// Bring-up mode:
-//   ADC1 injected sequence samples PC0/PC1/PC2.
-//   ADC injected conversion is started by software from the TIM1 ISR.
+// Sampling mode:
+//   ADC1 injected sequence triggered by TIM1_CC4 (hardware trigger).
+//   TIM1 CH4 CCR4 = PWM_CENTER fires at the PWM quiet point in center-aligned
+//   mode. ADC converts automatically — no software start in the ISR.
 //
-// Why software-start for now:
-//   TIM1 ISR fires.
-//   ADC injected software-start works.
-//   TIM1_CC4 external ADC trigger is not working yet.
-//   This gets real current samples flowing now.
+//   current_feedback_update() is called from the TIM1 ISR.
+//   It checks JEOC and reads JDR1/JDR2/JDR3 if conversion is complete.
+//
+// Calibration:
+//   current_feedback_calibrate() uses software-start (JSWSTART) by temporarily
+//   disabling JEXTEN. Hardware trigger is restored after calibration completes.
 //
 // Important:
 //   Do NOT use ADC_SR_JEOC from the current project headers.
-//   In this project it appeared to be 0x08.
 //   On STM32F4/F411, JEOC is bit 2 = 0x04.
+//   Project headers have been seen with wrong value 0x08.
 
 #include "current_feedback.h"
 #include "board_f411.h"
@@ -42,13 +44,13 @@
 // Current-sense scaling
 // =============================================================================
 
-#define SHUNT_R         0.007f
-#define SHUNT_GAIN      10.0f
-#define VREF            3.3f
-#define ADC_COUNTS      4096.0f
-#define ADC_ZERO        2048.0f
+#define SHUNT_R            0.007f
+#define SHUNT_GAIN         10.0f
+#define VREF               3.3f
+#define ADC_COUNTS         4096.0f
+#define ADC_ZERO           2048.0f
 
-#define AMPS_PER_COUNT  (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
+#define AMPS_PER_COUNT     (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
 #define ADC_SMP_84_CYCLES  (4u)
 
 
@@ -61,7 +63,6 @@
 
 // =============================================================================
 // ADC status bits
-// =============================================================================
 //
 // STM32F4 ADC SR bits:
 //   AWD   = bit 0 = 0x01
@@ -70,8 +71,7 @@
 //   JSTRT = bit 3 = 0x08
 //   STRT  = bit 4 = 0x10
 //   OVR   = bit 5 = 0x20
-//
-// Use this instead of ADC_SR_JEOC.
+// =============================================================================
 
 #define ADC_SR_JEOC_BIT   (1u << 2)
 
@@ -104,44 +104,27 @@ float adc_offset[3] =
 // Sample status / debug counters
 // =============================================================================
 
-static volatile bool current_sample_valid = false;
-static volatile uint32_t current_sample_count = 0u;
-static volatile uint32_t current_missed_count = 0u;
+static volatile bool     current_sample_valid  = false;
+static volatile uint32_t current_sample_count  = 0u;
+static volatile uint32_t current_missed_count  = 0u;
 
 
 // =============================================================================
 // current_feedback_sample_once
 //
-// Starts one injected ADC sequence by software and reads JDR1/JDR2/JDR3.
-//
-// This function is used by:
-//   - current_feedback_calibrate()
-//   - current_feedback_update()
-//
-// For now this is the known-good path.
+// Software-start one injected ADC sequence and read JDR1/JDR2/JDR3.
+// Used only by current_feedback_calibrate().
+// Temporarily disables JEXTEN so JSWSTART owns the conversion.
 // =============================================================================
 
 static bool current_feedback_sample_once(void)
 {
     uint32_t timeout = 10000u;
+    
 
-    /*
-     * Software-start injected conversion mode.
-     *
-     * JEXTEN must be disabled, otherwise external trigger mode owns injected
-     * conversion start.
-     */
     ADC1->CR2 &= ~ADC_CR2_JEXTEN;
-
-    /*
-     * Clear real JEOC bit before starting.
-     */
-    ADC1->SR &= ~ADC_SR_JEOC_BIT;
-
-    /*
-     * Start injected sequence.
-     */
-    ADC1->CR2 |= ADC_CR2_JSWSTART;
+    ADC1->SR  &= ~ADC_SR_JEOC_BIT;
+    ADC1->CR2 |=  ADC_CR2_JSWSTART;
 
     while ((ADC1->SR & ADC_SR_JEOC_BIT) == 0u)
     {
@@ -168,36 +151,15 @@ static bool current_feedback_sample_once(void)
 
 // =============================================================================
 // current_feedback_init
-//
-// Configure:
-//   - PC0/PC1/PC2 as analog inputs
-//   - ADC1 injected sequence: IN10, IN11, IN12
-//
-// No DMA.
-// No ADC continuous mode.
-// No external injected trigger for now.
 // =============================================================================
 
 void current_feedback_init(void)
 {
-    // -------------------------------------------------------------------------
-    // Enable peripheral clocks
-    // -------------------------------------------------------------------------
-
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
 
     (void)RCC->AHB1ENR;
     (void)RCC->APB2ENR;
-
-
-    // -------------------------------------------------------------------------
-    // PC0 / PC1 / PC2 analog mode
-    //
-    // PC0 = ADC1_IN10 = phase A current
-    // PC1 = ADC1_IN11 = phase B current
-    // PC2 = ADC1_IN12 = phase C current
-    // -------------------------------------------------------------------------
 
     GPIOC->MODER |=  (3u << (PIN_CUR_A * 2u));
     GPIOC->MODER |=  (3u << (PIN_CUR_B * 2u));
@@ -207,80 +169,18 @@ void current_feedback_init(void)
     GPIOC->PUPDR &= ~(3u << (PIN_CUR_B * 2u));
     GPIOC->PUPDR &= ~(3u << (PIN_CUR_C * 2u));
 
-
-    // -------------------------------------------------------------------------
-    // ADC common control
-    //
-    // ADCPRE = PCLK2 / 4.
-    // If PCLK2 = 84 MHz, ADC clock = 21 MHz.
-    // -------------------------------------------------------------------------
-
-    ADC->CCR = ADC_CCR_ADCPRE_0;
-
-
-    // -------------------------------------------------------------------------
-    // Start from clean ADC config
-    // -------------------------------------------------------------------------
+    ADC->CCR  = ADC_CCR_ADCPRE_0;
 
     ADC1->CR1 = 0u;
     ADC1->CR2 = 0u;
     ADC1->SR  = 0u;
 
-
-    // -------------------------------------------------------------------------
-    // Enable scan mode for multi-channel injected sequence
-    // -------------------------------------------------------------------------
-
     ADC1->CR1 |= ADC_CR1_SCAN;
-
-
-    // -------------------------------------------------------------------------
-    // Sample time
-    //
-    // Channels 10, 11, 12 are in SMPR1.
-    //
-    // 4 = 84 ADC cycles.
-    // At 21 MHz ADC clock:
-    //
-    //   3 * (84 + 12) / 21 MHz ~= 13.7 us
-    //
-    // This is okay for bring-up at 20 kHz, but it eats ISR time.
-    // Later, reduce sample time once the current feedback path is proven.
-    // -------------------------------------------------------------------------
-
-
-
-    /*
-    * ADC1 channels:
-    *   CH10 = PC0 / ISENA
-    *   CH11 = PC1 / ISENB
-    *   CH12 = PC2 / ISENC
-    *
-    * Debug sample time: 84 ADC cycles.
-    */
 
     ADC1->SMPR1 &= ~((7u << 0) | (7u << 3) | (7u << 6));
     ADC1->SMPR1 |=  ((ADC_SMP_84_CYCLES << 0) |
                      (ADC_SMP_84_CYCLES << 3) |
                      (ADC_SMP_84_CYCLES << 6));
-
-
-    // -------------------------------------------------------------------------
-    // Injected sequence
-    //
-    // JL = 2 gives 3 injected conversions.
-    //
-    // For 3 injected conversions on STM32F4:
-    //
-    //   JSQ2 -> JDR1
-    //   JSQ3 -> JDR2
-    //   JSQ4 -> JDR3
-    //
-    // Sequence:
-    //   IN10 -> JDR1
-    //   IN11 -> JDR2
-    //   IN12 -> JDR3
-    // -------------------------------------------------------------------------
 
     ADC1->JSQR =
         (2u  << ADC_JSQR_JL_Pos)   |
@@ -288,36 +188,23 @@ void current_feedback_init(void)
         (11u << ADC_JSQR_JSQ3_Pos) |
         (12u << ADC_JSQR_JSQ4_Pos);
 
-
-
-
-    // -------------------------------------------------------------------------
-    // Bring-up mode:
-    //
-    // Disable external injected trigger.
-    // current_feedback_update() starts injected conversion with JSWSTART.
-    // -------------------------------------------------------------------------
-
+    /*
+     * Hardware trigger: TIM1_CC4, rising edge.
+     *
+     * JEXTSEL = 4 = TIM1_CC4 on STM32F411.
+     * JEXTEN  = 1 = rising edge.
+     *
+     * TIM1 CCR4 = PWM_CENTER (1249) in center-aligned mode.
+     * Fires at the PWM quiet point — all switches fully settled.
+     */
     ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
-
-
-    // -------------------------------------------------------------------------
-    // Enable ADC
-    // -------------------------------------------------------------------------
+    // ADC1->CR2 |=  ((4u << ADC_CR2_JEXTSEL_Pos) |
+    //                (1u << ADC_CR2_JEXTEN_Pos));
+    ADC1->CR2 |=  ((0u << ADC_CR2_JEXTSEL_Pos) |
+               (1u << ADC_CR2_JEXTEN_Pos));
 
     ADC1->CR2 |= ADC_CR2_ADON;
-
-
-    // -------------------------------------------------------------------------
-    // Clear stale flags
-    // -------------------------------------------------------------------------
-
-    ADC1->SR = 0u;
-
-
-    // -------------------------------------------------------------------------
-    // Local state
-    // -------------------------------------------------------------------------
+    ADC1->SR   = 0u;
 
     current_adc_raw[0] = 2048u;
     current_adc_raw[1] = 2048u;
@@ -335,13 +222,6 @@ void current_feedback_init(void)
 
 // =============================================================================
 // current_feedback_calibrate
-//
-// Call with:
-//   - motor stationary
-//   - PWM bridge outputs disabled
-//   - DRV current-sense amplifiers enabled and settled
-//
-// Uses software-started injected ADC samples to find zero-current offsets.
 // =============================================================================
 
 void current_feedback_calibrate(void)
@@ -351,19 +231,10 @@ void current_feedback_calibrate(void)
     uint32_t sum_a = 0u;
     uint32_t sum_b = 0u;
     uint32_t sum_c = 0u;
-    uint32_t good = 0u;
+    uint32_t good  = 0u;
 
-    /*
-     * Let ADC and DRV current-sense amplifiers settle.
-     */
-    for (volatile uint32_t d = 0u; d < 200000u; d++)
-    {
-        __NOP();
-    }
+    for (volatile uint32_t d = 0u; d < 200000u; d++) { __NOP(); }
 
-    /*
-     * Throw away first samples.
-     */
     for (uint32_t i = 0u; i < 32u; i++)
     {
         (void)current_feedback_sample_once();
@@ -394,8 +265,22 @@ void current_feedback_calibrate(void)
     }
 
     /*
-     * Reset runtime counters after calibration.
+     * Re-enable hardware trigger after software-start calibration.
      */
+    ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
+    // ADC1->CR2 |=  ((4u << ADC_CR2_JEXTSEL_Pos) |
+    //                (1u << ADC_CR2_JEXTEN_Pos));
+ADC1->CR2 |=  ((0u << ADC_CR2_JEXTSEL_Pos) |
+               (1u << ADC_CR2_JEXTEN_Pos));
+    ADC1->SR = 0u;
+
+    /* Force ADC off then back on to clear any stuck state from JSWSTART */
+    ADC1->CR2 &= ~ADC_CR2_ADON;
+    for (volatile uint32_t d = 0u; d < 1000u; d++) { __NOP(); }
+    ADC1->CR2 |=  ADC_CR2_ADON;
+    for (volatile uint32_t d = 0u; d < 1000u; d++) { __NOP(); }
+    ADC1->SR   = 0u;
+
     current_sample_valid = false;
     current_sample_count = 0u;
     current_missed_count = 0u;
@@ -405,20 +290,23 @@ void current_feedback_calibrate(void)
 // =============================================================================
 // current_feedback_update
 //
-// Called once from the TIM1 update ISR.
-//
-// Bring-up path:
-//   TIM1 ISR gives timing.
-//   JSWSTART starts injected ADC conversion.
-//   JDR1/JDR2/JDR3 are read immediately after JEOC.
-//
-// This blocks for one injected sequence.
-// At current settings that is roughly 14 us.
+// Called from TIM1 ISR at 20 kHz.
+// Checks JEOC (injected end-of-conversion) flag set by TIM1_CC4 hardware
+// trigger. Reads JDR1/JDR2/JDR3 if conversion is complete.
+// Non-blocking — if ADC has not finished, keeps previous values.
 // =============================================================================
 
 void current_feedback_update(void)
 {
-    (void)current_feedback_sample_once();
+    if (ADC1->SR & ADC_SR_JEOC_BIT)
+    {
+        current_adc_raw[0] = ADC1->JDR1;
+        current_adc_raw[1] = ADC1->JDR2;
+        current_adc_raw[2] = ADC1->JDR3;
+        ADC1->SR          &= ~ADC_SR_JEOC_BIT;
+        current_sample_valid = true;
+        current_sample_count++;
+    }
 }
 
 
@@ -454,63 +342,22 @@ uint32_t current_feedback_missed_count(void)
 
 // =============================================================================
 // current_feedback_get_phase_amps
-//
-// Converts raw ADC counts to phase current in amps using calibrated offsets.
-//
-// Sign depends on amplifier polarity.
-// If current direction is inverted later, flip signs here.
 // =============================================================================
 
 void current_feedback_get_phase_amps(float *ia, float *ib, float *ic)
 {
     float a = ((float)current_adc_raw[0] - adc_offset[0]) * AMPS_PER_COUNT;
     float b = ((float)current_adc_raw[1] - adc_offset[1]) * AMPS_PER_COUNT;
-
-    /*
-     * C current-sense channel is unreliable on this DRV board.
-     * Use two-shunt reconstruction for control/math:
-     *
-     *   ia + ib + ic = 0
-     */
     float c = -(a + b);
 
-    if (ia != 0)
-    {
-        *ia = a;
-    }
-
-    if (ib != 0)
-    {
-        *ib = b;
-    }
-
-    if (ic != 0)
-    {
-        *ic = c;
-    }
+    if (ia != 0) { *ia = a; }
+    if (ib != 0) { *ib = b; }
+    if (ic != 0) { *ic = c; }
 }
 
 
 // =============================================================================
 // current_feedback_get_dq
-//
-// Convert measured phase currents to d/q current using Clarke + Park.
-//
-// Uses ia and ib. ic is measured for debug/sanity, but not required because:
-//
-//   ia + ib + ic = 0
-//
-// Clarke:
-//
-//   i_alpha = ia
-//   i_beta  = (ia + 2*ib) / sqrt(3)
-//
-// Park:
-//
-//   i_d =  i_alpha*cos(theta) + i_beta*sin(theta)
-//   i_q = -i_alpha*sin(theta) + i_beta*cos(theta)
-//
-// This matches the inverse Park convention used in pwm_apply_vq().
 // =============================================================================
 
 void current_feedback_get_dq(float theta, float *i_d, float *i_q)
@@ -526,15 +373,8 @@ void current_feedback_get_dq(float theta, float *i_d, float *i_q)
     float cos_t = cosf(theta);
     float sin_t = sinf(theta);
 
-    if (i_d != 0)
-    {
-        *i_d = (i_alpha * cos_t) + (i_beta * sin_t);
-    }
-
-    if (i_q != 0)
-    {
-        *i_q = (-i_alpha * sin_t) + (i_beta * cos_t);
-    }
+    if (i_d != 0) { *i_d = ( i_alpha * cos_t) + (i_beta * sin_t); }
+    if (i_q != 0) { *i_q = (-i_alpha * sin_t) + (i_beta * cos_t); }
 }
 
 
@@ -542,19 +382,6 @@ void current_feedback_get_dq(float theta, float *i_d, float *i_q)
 // Offset accessors
 // =============================================================================
 
-float current_feedback_get_offset_a(void)
-{
-    return adc_offset[0];
-}
-
-
-float current_feedback_get_offset_b(void)
-{
-    return adc_offset[1];
-}
-
-
-float current_feedback_get_offset_c(void)
-{
-    return adc_offset[2];
-}
+float current_feedback_get_offset_a(void) { return adc_offset[0]; }
+float current_feedback_get_offset_b(void) { return adc_offset[1]; }
+float current_feedback_get_offset_c(void) { return adc_offset[2]; }
