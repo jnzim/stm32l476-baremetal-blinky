@@ -339,6 +339,8 @@ void TIM1_UP_TIM10_IRQHandler(void)
         current_adc_raw[2],
         flags
     );
+    volatile uint32_t dbg_ftsr_after_drv = EXTI->FTSR;
+(void)dbg_ftsr_after_drv; 
 }
 /* =============================================================================
  * main
