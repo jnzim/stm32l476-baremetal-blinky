@@ -49,6 +49,14 @@
 #define ADC_ZERO        2048.0f
 
 #define AMPS_PER_COUNT  (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
+#define ADC_SMP_84_CYCLES  (4u)
+
+
+#if defined(ADC_SR_JEOC)
+#if ADC_SR_JEOC != (1u << 2)
+#error "ADC_SR_JEOC is wrong for STM32F4/F411"
+#endif
+#endif
 
 
 // =============================================================================
@@ -240,10 +248,21 @@ void current_feedback_init(void)
     // Later, reduce sample time once the current feedback path is proven.
     // -------------------------------------------------------------------------
 
-    ADC1->SMPR1 =
-        (4u << ADC_SMPR1_SMP10_Pos) |
-        (4u << ADC_SMPR1_SMP11_Pos) |
-        (4u << ADC_SMPR1_SMP12_Pos);
+
+
+    /*
+    * ADC1 channels:
+    *   CH10 = PC0 / ISENA
+    *   CH11 = PC1 / ISENB
+    *   CH12 = PC2 / ISENC
+    *
+    * Debug sample time: 84 ADC cycles.
+    */
+
+    ADC1->SMPR1 &= ~((7u << 0) | (7u << 3) | (7u << 6));
+    ADC1->SMPR1 |=  ((ADC_SMP_84_CYCLES << 0) |
+                     (ADC_SMP_84_CYCLES << 3) |
+                     (ADC_SMP_84_CYCLES << 6));
 
 
     // -------------------------------------------------------------------------
@@ -268,6 +287,8 @@ void current_feedback_init(void)
         (10u << ADC_JSQR_JSQ2_Pos) |
         (11u << ADC_JSQR_JSQ3_Pos) |
         (12u << ADC_JSQR_JSQ4_Pos);
+
+
 
 
     // -------------------------------------------------------------------------
@@ -444,7 +465,14 @@ void current_feedback_get_phase_amps(float *ia, float *ib, float *ic)
 {
     float a = ((float)current_adc_raw[0] - adc_offset[0]) * AMPS_PER_COUNT;
     float b = ((float)current_adc_raw[1] - adc_offset[1]) * AMPS_PER_COUNT;
-    float c = ((float)current_adc_raw[2] - adc_offset[2]) * AMPS_PER_COUNT;
+
+    /*
+     * C current-sense channel is unreliable on this DRV board.
+     * Use two-shunt reconstruction for control/math:
+     *
+     *   ia + ib + ic = 0
+     */
+    float c = -(a + b);
 
     if (ia != 0)
     {

@@ -70,6 +70,7 @@ static int32_t  encoder_offset = 0;
  * =============================================================================*/
 volatile uint32_t tick_ms = 0;
 volatile bool     system_initialized = false;
+volatile uint32_t tim1_isr_count = 0;
 
 
 /* =============================================================================
@@ -247,6 +248,9 @@ void SysTick_Handler(void)
 
 void TIM1_UP_TIM10_IRQHandler(void)
 {
+
+    tim1_isr_count++; 
+
     TIM1->SR = ~TIM_SR_UIF;
 
     if (!system_initialized)
@@ -280,6 +284,11 @@ void TIM1_UP_TIM10_IRQHandler(void)
      * Update current feedback.
      * Non-blocking: if no fresh sample, keep previous measured values.
      */
+    for (volatile uint32_t d = 0u; d < 100u; d++)
+    {
+        __NOP();
+    }
+
     current_feedback_update();
 
     float theta = foc_theta_from_encoder();
@@ -288,12 +297,19 @@ void TIM1_UP_TIM10_IRQHandler(void)
     if (current_feedback_sample_valid())
     {
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+
+        /*
+         * Force two-shunt reconstruction here.
+         * C ADC channel is diagnostic only.
+         */
+        ic_meas = -(ia_meas + ib_meas);
+
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
         i_q_plot += 0.02f * (i_q_meas - i_q_plot);
         i_d_plot += 0.02f * (i_d_meas - i_d_plot);
 
-        flags |= 0x0001u;   // fresh ADC/current sample consumed
+        flags |= 0x0001u;
     }
 
     /*
@@ -302,18 +318,25 @@ void TIM1_UP_TIM10_IRQHandler(void)
      * RPi reads this as one packed SysIdSample:
      *   t, ia, ib, ic, id, iq, vd, vq, theta, adc fields, flags
      */
+    /* Pack at integer level so sum is exact by construction */
+    int16_t ia_out = (int16_t)(ia_meas * 1000.0f);
+    int16_t ib_out = (int16_t)(ib_meas * 1000.0f);
+    int16_t ic_out = -(ia_out + ib_out);          /* exact integer reconstruction */
+    /* Temporary: trap any frame where sum != 0 */
+    volatile int16_t sum_check = ia_out + ib_out + ic_out;
+    (void)sum_check;  /* breakpoint here, watch sum_check */
     spi_sysid_update_latest(
-        (int16_t)(ia_meas * 1000.0f),
-        (int16_t)(ib_meas * 1000.0f),
-        (int16_t)(ic_meas * 1000.0f),
+        (int16_t)(ia_out),
+        (int16_t)(ib_out),
+        (int16_t)(ic_out),
         (int16_t)(i_d_meas * 1000.0f),
         (int16_t)(i_q_meas * 1000.0f),
         (int16_t)(foc_vd_applied * 1000.0f),
         (int16_t)(foc_vq_applied * 1000.0f),
         (int16_t)(theta * 1000.0f),
-        0,
-        0,
-        0,
+        current_adc_raw[0],
+        current_adc_raw[1],
+        current_adc_raw[2],
         flags
     );
 }
@@ -397,7 +420,7 @@ int main(void)
      *
      * Enable later when raw ADC/current feedback looks sane.
      */
-    // pwm_enable();
+     pwm_enable();
 
     /*
      * Optional DRV sanity reads.
