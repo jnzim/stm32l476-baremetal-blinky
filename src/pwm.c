@@ -72,14 +72,6 @@
 #define V_BUS        12.0f
 
 
-// =============================================================================
-// pwm_init — configure TIM1 and PA8/PA9/PA10
-//
-// Leaves outputs disabled with MOE = 0.
-// main() should call pwm_enable() only after the DRV is configured and the
-// initial CCR values are safe.
-// =============================================================================
-
 void pwm_init(void)
 {
     // -------------------------------------------------------------------------
@@ -88,6 +80,8 @@ void pwm_init(void)
 
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+
+    (void)RCC->APB2ENR;
     (void)RCC->AHB1ENR;
 
 
@@ -103,9 +97,6 @@ void pwm_init(void)
                       (2u << (PIN_PWM_B * 2u)) |
                       (2u << (PIN_PWM_C * 2u)));
 
-
-    // Medium speed is enough for 20 kHz PWM and helps reduce jumper-wire ringing.
-
     GPIOA->OSPEEDR &= ~((3u << (PIN_PWM_A * 2u)) |
                         (3u << (PIN_PWM_B * 2u)) |
                         (3u << (PIN_PWM_C * 2u)));
@@ -113,10 +104,6 @@ void pwm_init(void)
     GPIOA->OSPEEDR |=  ((1u << (PIN_PWM_A * 2u)) |
                         (1u << (PIN_PWM_B * 2u)) |
                         (1u << (PIN_PWM_C * 2u)));
-
-
-    // PA8/PA9/PA10 live in AFR[1]. Nibble index is pin - 8.
-    // AF1 = TIM1.
 
     GPIOA->AFR[1] &= ~((0xFu << ((PIN_PWM_A - 8u) * 4u)) |
                        (0xFu << ((PIN_PWM_B - 8u) * 4u)) |
@@ -128,23 +115,40 @@ void pwm_init(void)
 
 
     // -------------------------------------------------------------------------
+    // Clean TIM1 config
+    // -------------------------------------------------------------------------
+
+    TIM1->CR1  = 0u;
+    TIM1->CR2  = 0u;
+    TIM1->SMCR = 0u;
+    TIM1->DIER = 0u;
+    TIM1->CCER = 0u;
+    TIM1->BDTR = 0u;
+
+
+    // -------------------------------------------------------------------------
     // TIM1 base setup
     //
     // Center-aligned mode 1.
-    //
-    // In center-aligned mode, TIM1 update events happen at both overflow and
-    // underflow. RCR = 1 reduces the update interrupt rate to once per full PWM
-    // period.
+    // RCR = 1 gives one update interrupt per full PWM period.
     // -------------------------------------------------------------------------
 
     TIM1->CR1 = TIM_CR1_CMS_0;
-    TIM1->PSC = 0;
+    TIM1->PSC = 0u;
     TIM1->ARR = PWM_ARR;
-    TIM1->RCR = 1;
+    TIM1->RCR = 1u;
 
 
     // -------------------------------------------------------------------------
-    // TIM1 CH1/CH2/CH3 PWM mode 1 with preload enabled
+    // TIM1 CH1/CH2/CH3 PWM outputs
+    //
+    // CH1/2/3:
+    //   PWM mode 1, preload enabled.
+    //
+    // CH4:
+    //   Internal compare trigger for ADC injected conversion.
+    //   Toggle mode gives a real OC4 event edge.
+    //   No GPIO is configured for CH4.
     // -------------------------------------------------------------------------
 
     TIM1->CCMR1 =
@@ -152,13 +156,12 @@ void pwm_init(void)
         TIM_CCMR1_OC2M_1 | TIM_CCMR1_OC2M_2 | TIM_CCMR1_OC2PE;
 
     TIM1->CCMR2 =
-        TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE;
+        TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE |
+        TIM_CCMR2_OC4M_0 | TIM_CCMR2_OC4M_1;    // OC4M = 011 toggle mode
 
 
     // -------------------------------------------------------------------------
-    // Initial duty: 50%
-    //
-    // 50% duty corresponds to zero commanded phase voltage.
+    // Initial phase duty: 50%
     // -------------------------------------------------------------------------
 
     TIM1->CCR1 = PWM_CENTER;
@@ -167,36 +170,54 @@ void pwm_init(void)
 
 
     // -------------------------------------------------------------------------
-    // Enable only main outputs CH1/CH2/CH3.
+    // TIM1 CH4 ADC trigger at PWM center
+    // -------------------------------------------------------------------------
+
+    TIM1->CCR4 = PWM_CENTER;
+
+
+    // -------------------------------------------------------------------------
+    // Enable CH1/CH2/CH3 PWM compare outputs and CH4 compare event.
     //
-    // No complementary outputs are used in DRV8353 3x PWM mode.
+    // CH4 has no GPIO configured, so CC4E does not drive a physical pin.
     // -------------------------------------------------------------------------
 
-    TIM1->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E;
+    TIM1->CCER = TIM_CCER_CC1E |
+                 TIM_CCER_CC2E |
+                 TIM_CCER_CC3E |
+                 TIM_CCER_CC4E;
 
 
     // -------------------------------------------------------------------------
-    // Keep PWM outputs disabled until pwm_enable().
+    // Keep bridge outputs disabled until pwm_enable().
+    //
+    // TIM1 still runs, so ADC calibration can receive TIM1_CC4 triggers.
     // -------------------------------------------------------------------------
 
-    TIM1->BDTR = 0;
+    TIM1->BDTR = 0u;
 
 
-    TIM1->EGR  = TIM_EGR_UG;    // force load ARR/PSC/RCR
-    TIM1->SR   = 0;              // clear flags
-    TIM1->DIER = TIM_DIER_UIE;  // enable update interrupt
+    // -------------------------------------------------------------------------
+    // Force preload transfer, clear flags, enable TIM1 update interrupt.
+    // -------------------------------------------------------------------------
+
+    TIM1->EGR = TIM_EGR_UG;
+    TIM1->SR  = 0u;
+
+    TIM1->DIER = TIM_DIER_UIE;
+
     NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
-    TIM1->CR1 |= TIM_CR1_CEN;   // start counter — this line already exists
+
 
     // -------------------------------------------------------------------------
-    // Start timer counter.
-    //
-    // PWM pins remain disabled until MOE is set by pwm_enable().
+    // Start TIM1.
     // -------------------------------------------------------------------------
 
     TIM1->CR1 |= TIM_CR1_CEN;
 }
+
+   
 
 
 // =============================================================================

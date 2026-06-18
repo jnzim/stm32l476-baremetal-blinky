@@ -317,8 +317,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
         flags
     );
 }
-
-
 /* =============================================================================
  * main
  * =============================================================================*/
@@ -334,7 +332,13 @@ int main(void)
      */
     clock_init();
 
-    tim1_init();
+    /*
+     * Do NOT call tim1_init() here.
+     *
+     * pwm_init() owns TIM1:
+     *   - TIM1_CH1/2/3 = phase PWM
+     *   - TIM1_CH4     = ADC injected trigger
+     */
     encoder_init();
     drive_init();
     spi_init();
@@ -344,44 +348,77 @@ int main(void)
      * DRV8353 initialization.
      */
     drv8353_init();
+
     bool cfg_ok = drv8353_configure();
 
     /*
-     * PWM and current feedback initialization.
+     * Debug readback.
      *
-     * PWM outputs remain disabled until pwm_enable().
+     * Expected:
+     *   csa_ctrl = 0x0283
+     */
+    volatile uint16_t csa_ctrl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
+
+    /*
+     * Configure and start TIM1.
+     *
+     * PWM bridge outputs are still disabled because pwm_init()
+     * leaves TIM1 BDTR/MOE cleared.
+     *
+     * TIM1 is running, so TIM1_CC4 can trigger ADC injected conversions.
      */
     pwm_init();
+
+
+    /*
+     * Configure ADC current feedback.
+     *
+     * ADC waits for TIM1_CC4.
+     */
     current_feedback_init();
 
     /*
      * Enable DRV before current calibration so current-sense amplifiers are alive.
      *
-     * PWM is still disabled here, so the motor should not be driven.
+     * PWM bridge outputs are still disabled here, so the motor should not be driven.
      */
     drv_enable_high();
 
     /*
-     * Calibrate current feedback zero offsets with PWM disabled.
+     * Calibrate current feedback zero offsets with PWM bridge outputs disabled.
+     *
+     * This requires TIM1 to already be running because calibration waits for
+     * TIM1_CC4-triggered ADC injected samples.
      */
     current_feedback_calibrate();
 
     /*
-     * Now enable PWM output.
+     * Keep PWM disabled for current-sense debug.
+     *
+     * Enable later when raw ADC/current feedback looks sane.
      */
-    pwm_enable();
+    // pwm_enable();
 
     /*
      * Optional DRV sanity reads.
      */
-    volatile uint16_t fs1 = drv8353_read_reg(DRV8353_REG_FAULT_STATUS_1);
-    volatile uint16_t vgs = drv8353_read_reg(DRV8353_REG_VGS_STATUS_2);
-    volatile uint16_t dc  = drv8353_read_reg(DRV8353_REG_DRIVER_CONTROL);
+    volatile uint16_t fs1     = drv8353_read_reg(DRV8353_REG_FAULT_STATUS_1);
+    volatile uint16_t vgs     = drv8353_read_reg(DRV8353_REG_VGS_STATUS_2);
+    volatile uint16_t drv_ctl = drv8353_read_reg(DRV8353_REG_DRIVER_CONTROL);
+    volatile uint16_t gate_hs = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_HS);
+    volatile uint16_t gate_ls = drv8353_read_reg(DRV8353_REG_GATE_DRIVE_LS);
+    volatile uint16_t ocp_ctl = drv8353_read_reg(DRV8353_REG_OCP_CONTROL);
+    volatile uint16_t csa_ctl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
 
     (void)cfg_ok;
+    (void)csa_ctrl;
     (void)fs1;
     (void)vgs;
-    (void)dc;
+    (void)drv_ctl;
+    (void)gate_hs;
+    (void)gate_ls;
+    (void)ocp_ctl;
+    (void)csa_ctl;
 
     /*
      * Start 1 kHz SysTick only after PWM/DRV/current feedback are ready.
