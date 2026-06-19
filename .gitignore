@@ -2,6 +2,7 @@ cd ~/dev/stm/projects/drive && cat > .gitignore <<'EOF'
 # ===== Build artifacts =====
 build/
 out/
+drive_data/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
