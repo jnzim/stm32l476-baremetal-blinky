@@ -14,21 +14,22 @@
 //   zero current is approximately VREF / 2
 //
 // Sampling mode:
-//   ADC1 injected sequence triggered by TIM1_CC4 (hardware trigger).
-//   TIM1 CH4 CCR4 = PWM_CENTER fires at the PWM quiet point in center-aligned
-//   mode. ADC converts automatically — no software start in the ISR.
+//   ADC1 injected sequence triggered via TIM1_TRGO (JEXTSEL=1).
+//   TIM1 CR2 MMS=111 routes OC4REF as TRGO.
+//   CCR4 controls the sample point within the PWM cycle.
 //
-//   current_feedback_update() is called from the TIM1 ISR.
-//   It checks JEOC and reads JDR1/JDR2/JDR3 if conversion is complete.
+//   ADC_IRQHandler fires on JEOC and reads JDR1/JDR2/JDR3 immediately.
+//   PC4 pulses high during the read so the scope shows the actual sample point.
+//
+//   current_feedback_update() is a no-op — ADC IRQ owns the data.
 //
 // Calibration:
-//   current_feedback_calibrate() uses software-start (JSWSTART) by temporarily
-//   disabling JEXTEN. Hardware trigger is restored after calibration completes.
+//   current_feedback_calibrate() uses software-start (JSWSTART).
+//   Hardware trigger is restored after calibration completes.
 //
 // Important:
 //   Do NOT use ADC_SR_JEOC from the current project headers.
 //   On STM32F4/F411, JEOC is bit 2 = 0x04.
-//   Project headers have been seen with wrong value 0x08.
 
 #include "current_feedback.h"
 #include "board_f411.h"
@@ -59,19 +60,6 @@
 #error "ADC_SR_JEOC is wrong for STM32F4/F411"
 #endif
 #endif
-
-
-// =============================================================================
-// ADC status bits
-//
-// STM32F4 ADC SR bits:
-//   AWD   = bit 0 = 0x01
-//   EOC   = bit 1 = 0x02
-//   JEOC  = bit 2 = 0x04
-//   JSTRT = bit 3 = 0x08
-//   STRT  = bit 4 = 0x10
-//   OVR   = bit 5 = 0x20
-// =============================================================================
 
 #define ADC_SR_JEOC_BIT   (1u << 2)
 
@@ -110,18 +98,47 @@ static volatile uint32_t current_missed_count  = 0u;
 
 
 // =============================================================================
+// ADC_IRQHandler
+//
+// Fires on JEOC — ADC injected conversion complete.
+// Reads JDR1/JDR2/JDR3 immediately.
+// PC4 pulses high during the read so the scope shows the actual sample point
+// relative to the PWM waveform.
+// =============================================================================
+
+void ADC_IRQHandler(void)
+{
+    if (ADC1->SR & ADC_SR_JEOC_BIT)
+    {
+        GPIOC->BSRR = (1u << 4);            /* PC4 high — sample point */
+
+        current_adc_raw[0] = ADC1->JDR1;
+        current_adc_raw[1] = ADC1->JDR2;
+        current_adc_raw[2] = ADC1->JDR3;
+
+        ADC1->SR &= ~ADC_SR_JEOC_BIT;
+
+        current_sample_valid = true;
+        current_sample_count++;
+
+        GPIOC->BSRR = (1u << (4 + 16));     /* PC4 low */
+    }
+}
+
+
+// =============================================================================
 // current_feedback_sample_once
 //
 // Software-start one injected ADC sequence and read JDR1/JDR2/JDR3.
 // Used only by current_feedback_calibrate().
-// Temporarily disables JEXTEN so JSWSTART owns the conversion.
+// Temporarily disables JEXTEN and JEOCIE so JSWSTART owns the conversion.
 // =============================================================================
 
 static bool current_feedback_sample_once(void)
 {
     uint32_t timeout = 10000u;
-    
 
+    ADC1->CR1 &= ~ADC_CR1_JEOCIE;   /* disable JEOC interrupt during sw-start */
     ADC1->CR2 &= ~ADC_CR2_JEXTEN;
     ADC1->SR  &= ~ADC_SR_JEOC_BIT;
     ADC1->CR2 |=  ADC_CR2_JSWSTART;
@@ -161,6 +178,7 @@ void current_feedback_init(void)
     (void)RCC->AHB1ENR;
     (void)RCC->APB2ENR;
 
+    /* PC0/PC1/PC2 analog inputs */
     GPIOC->MODER |=  (3u << (PIN_CUR_A * 2u));
     GPIOC->MODER |=  (3u << (PIN_CUR_B * 2u));
     GPIOC->MODER |=  (3u << (PIN_CUR_C * 2u));
@@ -168,6 +186,11 @@ void current_feedback_init(void)
     GPIOC->PUPDR &= ~(3u << (PIN_CUR_A * 2u));
     GPIOC->PUPDR &= ~(3u << (PIN_CUR_B * 2u));
     GPIOC->PUPDR &= ~(3u << (PIN_CUR_C * 2u));
+
+    /* PC4 debug pulse — shows ADC sample point on scope */
+    GPIOC->MODER &= ~(3u << (4 * 2));
+    GPIOC->MODER |=  (1u << (4 * 2));    /* output */
+    GPIOC->BSRR   =  (1u << (4 + 16));   /* idle low */
 
     ADC->CCR  = ADC_CCR_ADCPRE_0;
 
@@ -189,22 +212,27 @@ void current_feedback_init(void)
         (12u << ADC_JSQR_JSQ4_Pos);
 
     /*
-     * Hardware trigger: TIM1_CC4, rising edge.
+     * Hardware trigger: TIM1_TRGO, rising edge.
      *
-     * JEXTSEL = 4 = TIM1_CC4 on STM32F411.
-     * JEXTEN  = 1 = rising edge.
+     * Per RM0383 Table 43:
+     *   JEXTSEL = 0001 (1) = TIM1_TRGO
+     *   JEXTEN  = 01   (1) = rising edge
      *
-     * TIM1 CCR4 = PWM_CENTER (1249) in center-aligned mode.
-     * Fires at the PWM quiet point — all switches fully settled.
+     * TIM1 CR2 MMS=111 routes OC4REF as TRGO.
+     * CCR4 controls when OC4REF fires within the PWM cycle.
      */
     ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
-    // ADC1->CR2 |=  ((4u << ADC_CR2_JEXTSEL_Pos) |
-    //                (1u << ADC_CR2_JEXTEN_Pos));
-    ADC1->CR2 |=  ((0u << ADC_CR2_JEXTSEL_Pos) |
-               (1u << ADC_CR2_JEXTEN_Pos));
+    ADC1->CR2 |=  ((1u << ADC_CR2_JEXTSEL_Pos) |
+                   (1u << ADC_CR2_JEXTEN_Pos));
+
+    /* Enable JEOC interrupt — ADC_IRQHandler reads results */
+    ADC1->CR1 |= ADC_CR1_JEOCIE;
 
     ADC1->CR2 |= ADC_CR2_ADON;
     ADC1->SR   = 0u;
+
+    NVIC_SetPriority(ADC_IRQn, 3);
+    NVIC_EnableIRQ(ADC_IRQn);
 
     current_adc_raw[0] = 2048u;
     current_adc_raw[1] = 2048u;
@@ -265,21 +293,21 @@ void current_feedback_calibrate(void)
     }
 
     /*
-     * Re-enable hardware trigger after software-start calibration.
+     * Re-enable hardware trigger and JEOC interrupt after calibration.
      */
     ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
-    // ADC1->CR2 |=  ((4u << ADC_CR2_JEXTSEL_Pos) |
-    //                (1u << ADC_CR2_JEXTEN_Pos));
-ADC1->CR2 |=  ((0u << ADC_CR2_JEXTSEL_Pos) |
-               (1u << ADC_CR2_JEXTEN_Pos));
+    ADC1->CR2 |=  ((1u << ADC_CR2_JEXTSEL_Pos) |
+                   (1u << ADC_CR2_JEXTEN_Pos));
+
     ADC1->SR = 0u;
 
-    /* Force ADC off then back on to clear any stuck state from JSWSTART */
     ADC1->CR2 &= ~ADC_CR2_ADON;
     for (volatile uint32_t d = 0u; d < 1000u; d++) { __NOP(); }
     ADC1->CR2 |=  ADC_CR2_ADON;
     for (volatile uint32_t d = 0u; d < 1000u; d++) { __NOP(); }
     ADC1->SR   = 0u;
+
+    ADC1->CR1 |= ADC_CR1_JEOCIE;   /* re-enable JEOC interrupt */
 
     current_sample_valid = false;
     current_sample_count = 0u;
@@ -290,23 +318,13 @@ ADC1->CR2 |=  ((0u << ADC_CR2_JEXTSEL_Pos) |
 // =============================================================================
 // current_feedback_update
 //
-// Called from TIM1 ISR at 20 kHz.
-// Checks JEOC (injected end-of-conversion) flag set by TIM1_CC4 hardware
-// trigger. Reads JDR1/JDR2/JDR3 if conversion is complete.
-// Non-blocking — if ADC has not finished, keeps previous values.
+// No-op — ADC_IRQHandler owns data read.
+// Called from TIM1 ISR for compatibility; does nothing.
 // =============================================================================
 
 void current_feedback_update(void)
 {
-    if (ADC1->SR & ADC_SR_JEOC_BIT)
-    {
-        current_adc_raw[0] = ADC1->JDR1;
-        current_adc_raw[1] = ADC1->JDR2;
-        current_adc_raw[2] = ADC1->JDR3;
-        ADC1->SR          &= ~ADC_SR_JEOC_BIT;
-        current_sample_valid = true;
-        current_sample_count++;
-    }
+    /* ADC_IRQHandler owns this — no polling needed */
 }
 
 

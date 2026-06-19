@@ -237,17 +237,6 @@ void TIM1_UP_TIM10_IRQHandler(void)
     if (!system_initialized)
         return;
 
-
-volatile uint32_t dbg_cr2  = ADC1->CR2;
-volatile uint32_t dbg_sr   = ADC1->SR;
-volatile uint32_t dbg_ccmr2 = TIM1->CCMR2;
-volatile uint32_t dbg_ccer  = TIM1->CCER;
-(void)dbg_cr2;
-(void)dbg_sr;
-(void)dbg_ccmr2;
-(void)dbg_ccer;
-
-
     encoder_update(tick_ms);
 
     run_foc_commutation();
@@ -256,7 +245,8 @@ volatile uint32_t dbg_ccer  = TIM1->CCER;
 
     float theta = foc_theta_from_encoder();
     uint16_t flags = 0;
-
+volatile uint32_t dbg_cr2_tim1 = TIM1->CR2;
+(void)dbg_cr2_tim1;
     if (current_feedback_sample_valid())
     {
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
@@ -271,12 +261,13 @@ volatile uint32_t dbg_ccer  = TIM1->CCER;
         flags |= 0x0001u;
     }
 
+    // Get ic from ia + ic + ib = 0;
     int16_t ia_out = (int16_t)(ia_meas * 1000.0f);
     int16_t ib_out = (int16_t)(ib_meas * 1000.0f);
     int16_t ic_out = -(ia_out + ib_out);
 
-    volatile uint32_t dbg_sample_count = current_feedback_sample_count();
-    (void)dbg_sample_count;
+    // volatile uint32_t dbg_sample_count = current_feedback_sample_count();
+    // (void)dbg_sample_count;
 
     spi_sysid_update_latest(
         ia_out,
