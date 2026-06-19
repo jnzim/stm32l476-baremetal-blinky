@@ -245,17 +245,15 @@ void spi_init(void)
     DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
     DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[0];
     DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
-    DMA1_Stream4->CR   =
+    DMA1_Stream4->CR =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_DIR_0             |   /* memory -> peripheral */
-        DMA_SxCR_MINC              |   /* walk through buffer */
-        DMA_SxCR_CIRC;                 /* loop continuously */
+        DMA_SxCR_MINC;                 /* no CIRC — rearmed per transaction */
 
     DMA1_Stream4->CR |= DMA_SxCR_EN;
 
-    /* SPI2 slave, Mode 1: CPOL=0, CPHA=1, SSM=1, SSI=0 */
-    SPI2->CR1 = SPI_CR1_CPHA | SPI_CR1_SSM;
-
+    
+    SPI2->CR1 = SPI_CR1_CPHA;  
     SPI2->CR2 = SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
 
     __DMB();
@@ -268,8 +266,8 @@ void spi_init(void)
     SYSCFG->EXTICR[3] &= ~(0xFu << 0);
     SYSCFG->EXTICR[3] |=  (0x1u << 0);
 
-    EXTI->FTSR |=  (1u << PIN_RPI_NSS);
-    EXTI->RTSR &= ~(1u << PIN_RPI_NSS);
+    EXTI->FTSR &= ~(1u << PIN_RPI_NSS);
+    EXTI->RTSR |=  (1u << PIN_RPI_NSS);
     EXTI->IMR  |=  (1u << PIN_RPI_NSS);
     EXTI->PR    =  (1u << PIN_RPI_NSS);
 
@@ -311,13 +309,20 @@ void DMA1_Stream3_IRQHandler(void)
 /* =============================================================================
  * CS falling edge IRQ (EXTI12) — counting only, no rearm
  * =============================================================================*/
-
 void EXTI15_10_IRQHandler(void)
 {
-    if (!(EXTI->PR & (1u << PIN_RPI_NSS))) {
-        return;
-    }
-
+    if (!(EXTI->PR & (1u << PIN_RPI_NSS))) return;
     EXTI->PR = (1u << PIN_RPI_NSS);
     cnt_cs++;
+
+    /* Rearm TX DMA on CS rising edge (end of transaction) */
+    while (DMA1_Stream4->CR & DMA_SxCR_EN) {}
+
+    DMA1->HIFCR = DMA_HIFCR_CTCIF4 | DMA_HIFCR_CHTIF4 |
+                  DMA_HIFCR_CTEIF4  | DMA_HIFCR_CDMEIF4 | DMA_HIFCR_CFEIF4;
+
+    uint8_t idx = spi_tx_write_idx;
+    DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[idx];
+    DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
+    DMA1_Stream4->CR  |= DMA_SxCR_EN;
 }
