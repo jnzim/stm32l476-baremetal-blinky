@@ -470,11 +470,11 @@ bool drv8353_configure(void)
 {
     // Order: gate drive + protection first, mode last.
     static const struct { uint8_t addr; uint16_t value; } cfg[] = {
-        { DRV8353_REG_GATE_DRIVE_HS, DRV_CFG_GATE_DRIVE_HS },
-        { DRV8353_REG_GATE_DRIVE_LS, DRV_CFG_GATE_DRIVE_LS },
-        { DRV8353_REG_OCP_CONTROL,   DRV_CFG_OCP_CONTROL   },
-        { DRV8353_REG_CSA_CONTROL,   DRV_CFG_CSA_CONTROL   },
-        { DRV8353_REG_DRIVER_CONTROL, DRV_CFG_DRIVER_CONTROL },
+    { DRV8353_REG_DRIVER_CONTROL, DRV_CFG_DRIVER_CONTROL },
+    { DRV8353_REG_GATE_DRIVE_LS,  DRV_CFG_GATE_DRIVE_LS  },
+    { DRV8353_REG_OCP_CONTROL,    DRV_CFG_OCP_CONTROL    },
+    { DRV8353_REG_CSA_CONTROL,    DRV_CFG_CSA_CONTROL    },
+    { DRV8353_REG_GATE_DRIVE_HS,  DRV_CFG_GATE_DRIVE_HS  }, // LOCK last
     };
 
     bool ok = true;
@@ -483,7 +483,7 @@ bool drv8353_configure(void)
     {
         drv8353_write_reg(cfg[i].addr, cfg[i].value);
 
-        uint16_t rb = drv8353_read_reg(cfg[i].addr);
+        volatile uint16_t rb = drv8353_read_reg(cfg[i].addr);
 
         // CLR_FLT (0x02 bit 0) self-clears; mask it out of comparison.
         uint16_t mask = (cfg[i].addr == DRV8353_REG_DRIVER_CONTROL)

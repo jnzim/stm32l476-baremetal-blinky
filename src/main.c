@@ -41,7 +41,7 @@
  * Increase only after encoder angle and current feedback look sane.
  * =============================================================================*/
 #define V_ALIGN  3.0f
-#define V_RUN    1.5f
+#define V_RUN    3.0f
 #define ENC_DIR  (+1.0f)
 
 
@@ -244,14 +244,13 @@ void TIM1_UP_TIM10_IRQHandler(void)
     current_feedback_update();
 
     float theta = foc_theta_from_encoder();
+
     uint16_t flags = 0;
-volatile uint32_t dbg_cr2_tim1 = TIM1->CR2;
-(void)dbg_cr2_tim1;
     if (current_feedback_sample_valid())
     {
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
 
-        ic_meas = -(ia_meas + ib_meas);
+        //ic_meas = -(ia_meas + ib_meas);
 
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
@@ -264,6 +263,7 @@ volatile uint32_t dbg_cr2_tim1 = TIM1->CR2;
     // Get ic from ia + ic + ib = 0;
     int16_t ia_out = (int16_t)(ia_meas * 1000.0f);
     int16_t ib_out = (int16_t)(ib_meas * 1000.0f);
+    //int16_t ic_out = (int16_t)(ic_meas * 1000.0f);
     int16_t ic_out = -(ia_out + ib_out);
 
     // volatile uint32_t dbg_sample_count = current_feedback_sample_count();
@@ -278,6 +278,9 @@ volatile uint32_t dbg_cr2_tim1 = TIM1->CR2;
         (int16_t)(foc_vd_applied * 1000.0f),
         (int16_t)(foc_vq_applied * 1000.0f),
         (int16_t)(theta * 1000.0f),
+        // (int16_t)TIM1->CCR1,
+        // (int16_t)TIM1->CCR2,
+        // (int16_t)TIM1->CCR3,
         current_adc_raw[0],
         current_adc_raw[1],
         current_adc_raw[2],
@@ -291,6 +294,10 @@ volatile uint32_t dbg_cr2_tim1 = TIM1->CR2;
  * =============================================================================*/
 int main(void)
 {
+    
+    system_initialized = true;
+    
+    
     /*
      * Enable FPU coprocessor.
      */
@@ -310,8 +317,18 @@ int main(void)
      */
     encoder_init();
     drive_init();
-    spi_init();
-    ring_init();
+spi_init();
+ring_init();
+
+/* Wait for Pi FIRE_SYSID trigger on PC3 (Pi GPIO16) */
+GPIOC->MODER &= ~(3u << (3u * 2u));
+GPIOC->PUPDR &= ~(3u << (3u * 2u));
+GPIOC->PUPDR |=  (1u << (3u * 2u));   /* pull-up */
+
+while (!(GPIOC->IDR & (1u << 3u))) {}  /* wait for high */
+while (GPIOC->IDR & (1u << 3u)) {}     /* wait for low */
+
+
 
     /*
      * DRV8353 initialization.
@@ -361,11 +378,7 @@ int main(void)
      */
     current_feedback_calibrate();
 
-    /*
-     * Keep PWM disabled for current-sense debug.
-     *
-     * Enable later when raw ADC/current feedback looks sane.
-     */
+
      pwm_enable();
 
     /*

@@ -46,7 +46,7 @@
 // =============================================================================
 
 #define SHUNT_R            0.007f
-#define SHUNT_GAIN         10.0f
+#define SHUNT_GAIN         40.0f
 #define VREF               3.3f
 #define ADC_COUNTS         4096.0f
 #define ADC_ZERO           2048.0f
@@ -366,7 +366,7 @@ void current_feedback_get_phase_amps(float *ia, float *ib, float *ic)
 {
     float a = ((float)current_adc_raw[0] - adc_offset[0]) * AMPS_PER_COUNT;
     float b = ((float)current_adc_raw[1] - adc_offset[1]) * AMPS_PER_COUNT;
-    float c = -(a + b);
+    float c = ((float)current_adc_raw[2] - adc_offset[2]) * AMPS_PER_COUNT;
 
     if (ia != 0) { *ia = a; }
     if (ib != 0) { *ib = b; }

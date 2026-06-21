@@ -54,6 +54,7 @@
 #include "pwm.h"
 #include "board_f411.h"
 #include "stm32f4xx.h"
+#include "config.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -73,8 +74,6 @@
 // Set this to match the bench supply.
 // During bring-up this has been 12 V.
 // =============================================================================
-
-#define V_BUS        12.0f
 
 
 void pwm_init(void)
