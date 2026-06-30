@@ -21,6 +21,7 @@
 
  #define ADC_SR_JEOC_BIT   (1u << 2)
 extern volatile uint16_t current_adc_raw[3];
+extern volatile float adc_offset[3];
 
 void current_feedback_init(void);
 void current_feedback_calibrate(void);

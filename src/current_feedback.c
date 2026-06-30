@@ -35,6 +35,7 @@
 #include "board_f411.h"
 #include "clock.h"
 #include "stm32f4xx.h"
+#include "config.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,14 +46,7 @@
 // Current-sense scaling
 // =============================================================================
 
-#define SHUNT_R            0.007f
-#define SHUNT_GAIN         40.0f
-#define VREF               3.3f
-#define ADC_COUNTS         4096.0f
-#define ADC_ZERO           2048.0f
 
-#define AMPS_PER_COUNT     (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
-#define ADC_SMP_84_CYCLES  (4u)
 
 
 #if defined(ADC_SR_JEOC)
@@ -80,7 +74,7 @@ volatile uint16_t current_adc_raw[3] =
 // Calibration offsets
 // =============================================================================
 
-float adc_offset[3] =
+volatile float adc_offset[3] =
 {
     ADC_ZERO,
     ADC_ZERO,

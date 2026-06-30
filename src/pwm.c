@@ -184,8 +184,13 @@ void pwm_init(void)
     // Adjust CCR4 to move the sample point if needed.
     // -------------------------------------------------------------------------
 
-    TIM1->CCR4 = 250u;   /*scope-verified sample point avoids switching transient */
+    //TIM1->CCR4 = 250u;   /*scope-verified sample point avoids switching transient */
+   TIM1->CCR4 = PWM_CENTER;   /*scope-verified sample point avoids switching transient */    
 
+    // -------------------------------------------------------------------------
+    // Enable CH1/CH2/CH3 outputs and CH4 compare event.
+    // CC4E must be set even though CH4 drives no GPIO pin.
+    // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------
     // Enable CH1/CH2/CH3 outputs and CH4 compare event.
@@ -252,9 +257,9 @@ void pwm_set_duty(uint8_t phase, uint16_t duty)
 
     switch (phase)
     {
-        case 0: TIM1->CCR1 = duty; break;
+        case 0: TIM1->CCR3 = duty; break;
         case 1: TIM1->CCR2 = duty; break;
-        case 2: TIM1->CCR3 = duty; break;
+        case 2: TIM1->CCR1 = duty; break;
         default: break;
     }
 }
@@ -287,6 +292,7 @@ void pwm_apply_phase_volts(float va, float vb, float vc)
 }
 
 
+
 // =============================================================================
 // pwm_apply_vq — inverse Park + inverse Clarke voltage output
 //
@@ -306,4 +312,5 @@ void pwm_apply_vq(float v_q, float v_d, float theta)
     float vc = -0.5f * v_alpha - 0.86602540378f * v_beta;
 
     pwm_apply_phase_volts(va, vb, vc);
+
 }

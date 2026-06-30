@@ -21,6 +21,17 @@
 #include "current_feedback.h"
 
 
+// In your defines/globals
+#define SYSID_AMPLITUDE   3.0f
+#define SYSID_F_START     1.0f
+#define SYSID_F_END       250.0f
+#define SYSID_DURATION    15.0f        // 20 seconds, ~1 second per decade
+#define SYSID_DT          (1.0f / 20000.0f)
+
+static float sysid_t     = 0.0f;
+static float sysid_phase = 0.0f;
+static float sysid_f     = SYSID_F_START;
+
 
 /* =============================================================================
  * Alignment timing
@@ -28,21 +39,12 @@
  * ALIGN_TICKS is counted from SysTick_Handler().
  * SysTick = 1 kHz, so:
  *
- *   1000 ticks = 1.0 second
+
  *
  * =============================================================================*/
-#define ALIGN_TICKS 1000u
+#define ALIGN_TICKS 2000u
 
 
-/* =============================================================================
- * Bench bring-up voltages
- *
- * These are intentionally modest.
- * Increase only after encoder angle and current feedback look sane.
- * =============================================================================*/
-#define V_ALIGN  3.0f
-#define V_RUN    3.0f
-#define ENC_DIR  (+1.0f)
 
 
 /* =============================================================================
@@ -54,7 +56,9 @@
 typedef enum
 {
     FOC_STAGE_ALIGN = 0,
-    FOC_STAGE_RUN
+    FOC_STAGE_RUN,
+    FOC_STAGE_SYSID,
+    FOC_STAGE_IDLE
 } FocStage;
 
 
@@ -72,17 +76,6 @@ static int32_t  encoder_offset = 0;
 volatile uint32_t tick_ms = 0;
 volatile bool     system_initialized = false;
 volatile uint32_t tim1_isr_count = 0;
-
-
-/* =============================================================================
- * Original profile/control scaffold state
- * =============================================================================*/
-static uint32_t div_1k = 0;
-static uint32_t div_5k = 0;
-
-static bool     move_in_progress = false;
-static uint32_t prev_count = 0;
-static int32_t  profile_vel_cmd = 0;
 
 
 /* =============================================================================
@@ -169,7 +162,8 @@ static void run_foc_commutation(void)
              * theta = 0
              */
             foc_vq_applied = 0.0f;
-            foc_vd_applied = V_ALIGN;
+            foc_vd_applied = 3.0f;
+            
 
             pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
 
@@ -178,9 +172,10 @@ static void run_foc_commutation(void)
                 /*
                  * Rotor has settled. Capture this encoder count as electrical zero.
                  */
-                encoder_offset = encoder_get_position();
 
-                foc_stage = FOC_STAGE_RUN;
+                encoder_offset = encoder_get_position(); 
+
+                foc_stage = FOC_STAGE_SYSID;
             }
         }
         break;
@@ -199,6 +194,39 @@ static void run_foc_commutation(void)
             foc_vd_applied = 0.0f;
 
             pwm_apply_vq(foc_vq_applied, foc_vd_applied, theta_elec);
+        }
+        break;
+
+        case FOC_STAGE_SYSID:
+        {
+            // Log-linear frequency sweep
+            sysid_f = SYSID_F_START * powf(SYSID_F_END / SYSID_F_START,
+                                            sysid_t / SYSID_DURATION);
+            
+            // Integrate phase to avoid discontinuities
+            sysid_phase += 2.0f * M_PI * sysid_f * SYSID_DT;
+            if (sysid_phase > 2.0f * M_PI) sysid_phase -= 2.0f * M_PI;
+            
+            foc_vd_applied = SYSID_AMPLITUDE * sinf(sysid_phase);
+            foc_vq_applied = 0.0f;
+            pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
+            
+            // Get current feedback
+            current_feedback_get_dq(0.0f, &i_d_meas, &i_q_meas);
+            
+            sysid_t += SYSID_DT;
+            if (sysid_t >= SYSID_DURATION)
+            {
+                foc_stage = FOC_STAGE_IDLE;
+            }
+
+if (foc_stage == FOC_STAGE_SYSID && (tim1_isr_count % 20000) == 0)
+{
+   volatile int testInt;
+   testInt++;
+}
+
+
         }
         break;
 
@@ -243,47 +271,50 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
     current_feedback_update();
 
-    float theta = foc_theta_from_encoder();
+
+    volatile float theta;
+    if (foc_stage == FOC_STAGE_SYSID)
+    {
+        theta = 0.0f;
+    }
+    else
+    {
+        theta = foc_theta_from_encoder();
+    }
 
     uint16_t flags = 0;
     if (current_feedback_sample_valid())
     {
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
-
-        //ic_meas = -(ia_meas + ib_meas);
-
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
-
         i_q_plot += 0.02f * (i_q_meas - i_q_plot);
         i_d_plot += 0.02f * (i_d_meas - i_d_plot);
-
         flags |= 0x0001u;
     }
 
+
+    uint16_t adc_a_delta = (int16_t)((int32_t)current_adc_raw[0] - (int32_t)adc_offset[0]);
+    uint16_t adc_b_delta = (int16_t)((int32_t)current_adc_raw[1] - (int32_t)adc_offset[1]);
+    uint16_t adc_c_delta = (int16_t)((int32_t)current_adc_raw[2] - (int32_t)adc_offset[2]);
     // Get ic from ia + ic + ib = 0;
     int16_t ia_out = (int16_t)(ia_meas * 1000.0f);
     int16_t ib_out = (int16_t)(ib_meas * 1000.0f);
-    //int16_t ic_out = (int16_t)(ic_meas * 1000.0f);
-    int16_t ic_out = -(ia_out + ib_out);
-
-    // volatile uint32_t dbg_sample_count = current_feedback_sample_count();
-    // (void)dbg_sample_count;
+    int16_t ic_out = (int16_t)(ic_meas * 1000.0f);
+    //int16_t ic_out = -(ia_out + ib_out);
 
     spi_sysid_update_latest(
         ia_out,
         ib_out,
+        //(int16_t)sysid_f, // c can be calulated by a and b. 
         ic_out,
         (int16_t)(i_d_meas * 1000.0f),
         (int16_t)(i_q_meas * 1000.0f),
         (int16_t)(foc_vd_applied * 1000.0f),
         (int16_t)(foc_vq_applied * 1000.0f),
         (int16_t)(theta * 1000.0f),
-        // (int16_t)TIM1->CCR1,
-        // (int16_t)TIM1->CCR2,
-        // (int16_t)TIM1->CCR3,
-        current_adc_raw[0],
-        current_adc_raw[1],
-        current_adc_raw[2],
+        (uint16_t)current_adc_raw[0],
+        (uint16_t)current_adc_raw[1],
+        (uint16_t)current_adc_raw[2],
         flags
     );
 }
@@ -295,9 +326,8 @@ void TIM1_UP_TIM10_IRQHandler(void)
 int main(void)
 {
     
-    system_initialized = true;
-    
-    
+    system_initialized = false;
+
     /*
      * Enable FPU coprocessor.
      */
@@ -344,7 +374,9 @@ while (GPIOC->IDR & (1u << 3u)) {}     /* wait for low */
      *   csa_ctrl = 0x0283
      */
     volatile uint16_t csa_ctrl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
-
+    csa_ctrl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
+   
+     
     /*
      * Configure and start TIM1.
      *

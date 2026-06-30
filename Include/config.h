@@ -17,8 +17,26 @@
 // ── Bus voltage ───────────────────────────────────────────────────────────────
 #define V_BUS               12.0f       // volts — update to match bench supply
 
-// ── Alignment ─────────────────────────────────────────────────────────────────
-#define ALIGN_VOLTAGE       1.0f        // volts — low enough to align without overcurrent
-#define ALIGN_TIME_MS       500u        // ms — time to hold rotor at alignment angle
 
 #define FF_GAIN             0.95f        // vel FF gain~
+
+#define SHUNT_R            0.007f
+#define SHUNT_GAIN         40.0f
+#define VREF               3.3f
+#define ADC_COUNTS         4096.0f
+#define ADC_ZERO           2048.0f
+
+#define AMPS_PER_COUNT     (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
+//#define AMPS_PER_COUNT      0.01242
+#define ADC_SMP_84_CYCLES  (4u) 
+
+
+/* =============================================================================
+ * Bench bring-up voltages
+ *
+ * These are intentionally modest.
+ * Increase only after encoder angle and current feedback look sane.
+ * =============================================================================*/
+#define V_ALIGN  3.0f
+#define V_RUN    3.0f
+#define ENC_DIR  (+1.0f)
