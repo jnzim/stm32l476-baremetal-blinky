@@ -279,35 +279,25 @@ int main(void)
     
     system_initialized = false;
 
-    /*
-     * Enable FPU coprocessor.
-     */
+     //  Enable FPU coprocessor.
     SCB->CPACR |= ((3UL << (10u * 2u)) | (3UL << (11u * 2u)));
 
     /*
      * Core board/peripheral initialization.
      */
     clock_init();
-
-    /*
-     * Do NOT call tim1_init() here.
-     *
-     * pwm_init() owns TIM1:
-     *   - TIM1_CH1/2/3 = phase PWM
-     *   - TIM1_CH4     = ADC injected trigger
-     */
     encoder_init();
     drive_init();
-spi_init();
-ring_init();
+    spi_init();
+    ring_init();
 
-/* Wait for Pi FIRE_SYSID trigger on PC3 (Pi GPIO16) */
-GPIOC->MODER &= ~(3u << (3u * 2u));
-GPIOC->PUPDR &= ~(3u << (3u * 2u));
-GPIOC->PUPDR |=  (1u << (3u * 2u));   /* pull-up */
+    /* Wait for Pi FIRE_SYSID trigger on PC3 (Pi GPIO16) */
+    GPIOC->MODER &= ~(3u << (3u * 2u));
+    GPIOC->PUPDR &= ~(3u << (3u * 2u));
+    GPIOC->PUPDR |=  (1u << (3u * 2u));   /* pull-up */
 
-while (!(GPIOC->IDR & (1u << 3u))) {}  /* wait for high */
-while (GPIOC->IDR & (1u << 3u)) {}     /* wait for low */
+    while (!(GPIOC->IDR & (1u << 3u))) {}  /* wait for high */
+    while (GPIOC->IDR & (1u << 3u)) {}     /* wait for low */
 
 
 
