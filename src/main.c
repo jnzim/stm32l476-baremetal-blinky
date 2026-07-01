@@ -143,25 +143,21 @@ static void run_foc_commutation(void)
 
             if (++foc_align_tick >= ALIGN_TICKS)
             {
-                /*
-                 * Rotor has settled. Capture this encoder count as electrical zero.
-                 */
-
-                encoder_offset = encoder_get_position(); 
-
+                encoder_offset = encoder_get_position();
+            
+            #if RUN_MODE == RUN_MODE_SYSID
                 foc_stage = FOC_STAGE_SYSID;
+            #else
+                foc_stage = FOC_STAGE_RUN;
+            #endif
             }
         }
         break;
 
         case FOC_STAGE_RUN:
         {
-            /*
-             * Use encoder-derived electrical angle.
-             *
-             * Do not add 90 degrees here.
-             * q-axis behavior comes from v_q.
-             */
+           
+             //Use encoder-derived electrical angle.
             float theta_elec = foc_theta_from_encoder();
 
             foc_vq_applied = V_RUN;
@@ -193,14 +189,6 @@ static void run_foc_commutation(void)
             {
                 foc_stage = FOC_STAGE_IDLE;
             }
-
-if (foc_stage == FOC_STAGE_SYSID && (tim1_isr_count % 20000) == 0)
-{
-   volatile int testInt;
-   testInt++;
-}
-
-
         }
         break;
 

@@ -1,6 +1,11 @@
 // config.h — motor and control constants, STM32 only
 #pragma once
 
+
+#define RUN_MODE_SYSID        0
+#define RUN_MODE_CLOSED_LOOP  1
+#define RUN_MODE              RUN_MODE_SYSID
+
 // ── Math ──────────────────────────────────────────────────────────────────────
 #ifndef M_PI
 #define M_PI  3.14159265358979323846f
