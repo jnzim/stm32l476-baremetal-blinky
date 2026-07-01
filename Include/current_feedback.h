@@ -19,7 +19,9 @@
  * Later, ADC triggering should be tied to TIM1 at a quiet PWM point.
  */
 
+ #define ADC_SR_JEOC_BIT   (1u << 2)
 extern volatile uint16_t current_adc_raw[3];
+extern volatile float adc_offset[3];
 
 void current_feedback_init(void);
 void current_feedback_calibrate(void);
@@ -34,7 +36,8 @@ float current_feedback_get_offset_a(void);
 float current_feedback_get_offset_b(void);
 float current_feedback_get_offset_c(void);
 
-void current_feedback_update(void);
 bool current_feedback_sample_valid(void);
 uint32_t current_feedback_sample_count(void);
 uint32_t current_feedback_missed_count(void);
+
+static int adc_wait_jeoc_timeout(uint32_t timeout);

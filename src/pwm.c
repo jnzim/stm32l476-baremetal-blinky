@@ -1,4 +1,3 @@
-
 // pwm.c — TIM1 3-phase PWM for DRV8353RS-EVM gate driver, 3x PWM mode
 // STM32F411/F446 bare metal
 //
@@ -41,6 +40,12 @@
 // Note:
 //   If APB2 timer clock is 84 MHz, use ARR = 2099 for 20 kHz.
 //
+// ADC trigger:
+//   TIM1 CR2 MMS=111 routes OC4REF as TRGO.
+//   ADC JEXTSEL=1 selects TIM1_TRGO as injected trigger.
+//   CCR4 controls exactly when in the PWM cycle the ADC samples.
+//   CCR4 = PWM_CENTER places the sample at the midpoint of the on-time.
+//
 // Bring-up status:
 //   pwm_apply_vq() convention has been proven with open-loop voltage-vector
 //   rotation. Do not change signs casually. Encoder alignment is the next place
@@ -49,6 +54,7 @@
 #include "pwm.h"
 #include "board_f411.h"
 #include "stm32f4xx.h"
+#include "config.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -69,16 +75,6 @@
 // During bring-up this has been 12 V.
 // =============================================================================
 
-#define V_BUS        12.0f
-
-
-// =============================================================================
-// pwm_init — configure TIM1 and PA8/PA9/PA10
-//
-// Leaves outputs disabled with MOE = 0.
-// main() should call pwm_enable() only after the DRV is configured and the
-// initial CCR values are safe.
-// =============================================================================
 
 void pwm_init(void)
 {
@@ -88,6 +84,8 @@ void pwm_init(void)
 
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+
+    (void)RCC->APB2ENR;
     (void)RCC->AHB1ENR;
 
 
@@ -103,9 +101,6 @@ void pwm_init(void)
                       (2u << (PIN_PWM_B * 2u)) |
                       (2u << (PIN_PWM_C * 2u)));
 
-
-    // Medium speed is enough for 20 kHz PWM and helps reduce jumper-wire ringing.
-
     GPIOA->OSPEEDR &= ~((3u << (PIN_PWM_A * 2u)) |
                         (3u << (PIN_PWM_B * 2u)) |
                         (3u << (PIN_PWM_C * 2u)));
@@ -113,10 +108,6 @@ void pwm_init(void)
     GPIOA->OSPEEDR |=  ((1u << (PIN_PWM_A * 2u)) |
                         (1u << (PIN_PWM_B * 2u)) |
                         (1u << (PIN_PWM_C * 2u)));
-
-
-    // PA8/PA9/PA10 live in AFR[1]. Nibble index is pin - 8.
-    // AF1 = TIM1.
 
     GPIOA->AFR[1] &= ~((0xFu << ((PIN_PWM_A - 8u) * 4u)) |
                        (0xFu << ((PIN_PWM_B - 8u) * 4u)) |
@@ -128,23 +119,43 @@ void pwm_init(void)
 
 
     // -------------------------------------------------------------------------
+    // Clean TIM1 config
+    // -------------------------------------------------------------------------
+
+    TIM1->CR1  = 0u;
+    TIM1->CR2  = 0u;
+    TIM1->SMCR = 0u;
+    TIM1->DIER = 0u;
+    TIM1->CCER = 0u;
+    TIM1->BDTR = 0u;
+
+
+    // -------------------------------------------------------------------------
     // TIM1 base setup
     //
-    // Center-aligned mode 1.
+    // Center-aligned mode 1 (CMS=01).
+    // RCR = 1 gives one update interrupt per full PWM period.
     //
-    // In center-aligned mode, TIM1 update events happen at both overflow and
-    // underflow. RCR = 1 reduces the update interrupt rate to once per full PWM
-    // period.
+    // CR2 MMS=111: routes OC4REF as TRGO.
+    // ADC injected trigger (JEXTSEL=1 = TIM1_TRGO) fires when OC4REF rises.
+    // CCR4 controls the sample point within the PWM cycle.
     // -------------------------------------------------------------------------
 
     TIM1->CR1 = TIM_CR1_CMS_0;
-    TIM1->PSC = 0;
+    TIM1->CR2 = (7u << TIM_CR2_MMS_Pos);   /* MMS=111: TRGO = OC4REF */
+    TIM1->PSC = 0u;
     TIM1->ARR = PWM_ARR;
-    TIM1->RCR = 1;
+    TIM1->RCR = 1u;
 
 
     // -------------------------------------------------------------------------
-    // TIM1 CH1/CH2/CH3 PWM mode 1 with preload enabled
+    // TIM1 CH1/CH2/CH3 PWM outputs — PWM mode 1, preload enabled.
+    //
+    // TIM1 CH4 — PWM mode 1, no GPIO.
+    //   OC4REF is HIGH when counter < CCR4.
+    //   TRGO (MMS=111) fires on OC4REF rising edge.
+    //   In center-aligned mode, OC4REF rises at CCR4 count on the way DOWN.
+    //   CCR4 = PWM_CENTER places the trigger at mid-cycle quiet point.
     // -------------------------------------------------------------------------
 
     TIM1->CCMR1 =
@@ -152,13 +163,12 @@ void pwm_init(void)
         TIM_CCMR1_OC2M_1 | TIM_CCMR1_OC2M_2 | TIM_CCMR1_OC2PE;
 
     TIM1->CCMR2 =
-        TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE;
+        TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3PE |
+        TIM_CCMR2_OC4M_1 | TIM_CCMR2_OC4M_2;   /* OC4M=110 PWM mode 1 */
 
 
     // -------------------------------------------------------------------------
-    // Initial duty: 50%
-    //
-    // 50% duty corresponds to zero commanded phase voltage.
+    // Initial phase duty: 50%
     // -------------------------------------------------------------------------
 
     TIM1->CCR1 = PWM_CENTER;
@@ -167,32 +177,58 @@ void pwm_init(void)
 
 
     // -------------------------------------------------------------------------
-    // Enable only main outputs CH1/CH2/CH3.
+    // TIM1 CH4 ADC trigger
     //
-    // No complementary outputs are used in DRV8353 3x PWM mode.
+    // CCR4 = PWM_CENTER: OC4REF rises at count=1249 on the way down.
+    // This is the mid-cycle quiet point for current sampling.
+    // Adjust CCR4 to move the sample point if needed.
     // -------------------------------------------------------------------------
 
-    TIM1->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E;
+    // Was:
+    TIM1->CCR4 = PWM_CENTER;   // fires at mid-cycle — high-side window, wrong
+
+    // Fix:
+    #define PWM_SAMPLE_OFFSET  50u
+    TIM1->CCR4 = PWM_ARR - PWM_SAMPLE_OFFSET;   // = 2449, fires just after peak on way down
+
+    // -------------------------------------------------------------------------
+    // Enable CH1/CH2/CH3 outputs and CH4 compare event.
+    // CC4E must be set even though CH4 drives no GPIO pin.
+    // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // Enable CH1/CH2/CH3 outputs and CH4 compare event.
+    // CC4E must be set even though CH4 drives no GPIO pin.
+    // -------------------------------------------------------------------------
+
+    TIM1->CCER = TIM_CCER_CC1E |
+                 TIM_CCER_CC2E |
+                 TIM_CCER_CC3E |
+                 TIM_CCER_CC4E;
 
 
     // -------------------------------------------------------------------------
-    // Keep PWM outputs disabled until pwm_enable().
+    // Keep bridge outputs disabled until pwm_enable().
     // -------------------------------------------------------------------------
 
-    TIM1->BDTR = 0;
+    TIM1->BDTR = 0u;
 
 
-    TIM1->EGR  = TIM_EGR_UG;    // force load ARR/PSC/RCR
-    TIM1->SR   = 0;              // clear flags
-    TIM1->DIER = TIM_DIER_UIE;  // enable update interrupt
+    // -------------------------------------------------------------------------
+    // Force preload transfer, clear flags, enable TIM1 update interrupt.
+    // -------------------------------------------------------------------------
+
+    TIM1->EGR = TIM_EGR_UG;
+    TIM1->SR  = 0u;
+
+    TIM1->DIER = TIM_DIER_UIE;
+
     NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
-    TIM1->CR1 |= TIM_CR1_CEN;   // start counter — this line already exists
+
 
     // -------------------------------------------------------------------------
-    // Start timer counter.
-    //
-    // PWM pins remain disabled until MOE is set by pwm_enable().
+    // Start TIM1.
     // -------------------------------------------------------------------------
 
     TIM1->CR1 |= TIM_CR1_CEN;
@@ -201,15 +237,12 @@ void pwm_init(void)
 
 // =============================================================================
 // pwm_enable / pwm_disable
-//
-// Uses TIM1 BDTR.MOE to enable/disable the PWM outputs.
 // =============================================================================
 
 void pwm_enable(void)
 {
     TIM1->BDTR |= TIM_BDTR_MOE;
 }
-
 
 void pwm_disable(void)
 {
@@ -219,14 +252,6 @@ void pwm_disable(void)
 
 // =============================================================================
 // pwm_set_duty — write one phase CCR
-//
-// phase:
-//   0 = A / TIM1_CH1 / PA8
-//   1 = B / TIM1_CH2 / PA9
-//   2 = C / TIM1_CH3 / PA10
-//
-// duty:
-//   CCR count in range 0..PWM_ARR
 // =============================================================================
 
 void pwm_set_duty(uint8_t phase, uint16_t duty)
@@ -236,56 +261,41 @@ void pwm_set_duty(uint8_t phase, uint16_t duty)
 
     switch (phase)
     {
-        case 0:
-            TIM1->CCR1 = duty;
-            break;
-
-        case 1:
-            TIM1->CCR2 = duty;
-            break;
-
-        case 2:
-            TIM1->CCR3 = duty;
-            break;
-
-        default:
-            break;
+        case 0: TIM1->CCR3 = duty; break;
+        case 1: TIM1->CCR2 = duty; break;
+        case 2: TIM1->CCR1 = duty; break;
+        default: break;
     }
 }
 
 
 // =============================================================================
 // volts_to_duty — phase voltage command -> CCR count
-//
-// Mapping:
-//
-//   -V_BUS -> 0
-//    0 V   -> PWM_CENTER
-//   +V_BUS -> PWM_ARR approximately
-//
-// This is centered sinusoidal PWM scaling. It is intentionally simple for
-// bring-up. Later, this can be replaced or extended with SVPWM.
 // =============================================================================
 
 uint16_t volts_to_duty(float v)
 {
     float normalized = v / V_BUS;
 
-    if (normalized > 1.0f)
-        normalized = 1.0f;
+    if (normalized >  1.0f) normalized =  1.0f;
+    if (normalized < -1.0f) normalized = -1.0f;
 
-    if (normalized < -1.0f)
-        normalized = -1.0f;
+    uint16_t ccr = (uint16_t)(normalized * (float)PWM_CENTER + (float)PWM_CENTER);
 
-    return (uint16_t)(normalized * (float)PWM_CENTER + (float)PWM_CENTER);
+    // Clamp to ~4-96% to guarantee low-side window >= ADC acquisition time.
+    // At ARR=2499: 4% = 100 counts, 96% = 2399 counts.
+#define DUTY_MIN  100u
+#define DUTY_MAX  2399u
+
+    if (ccr < DUTY_MIN) ccr = DUTY_MIN;
+    if (ccr > DUTY_MAX) ccr = DUTY_MAX;
+
+    return ccr;
 }
 
 
 // =============================================================================
-// pwm_apply_phase_volts — apply three phase voltage commands
-//
-// va/vb/vc are phase voltage commands centered around zero.
-// This function converts them to TIM1 CCR values.
+// pwm_apply_phase_volts
 // =============================================================================
 
 void pwm_apply_phase_volts(float va, float vb, float vc)
@@ -296,39 +306,11 @@ void pwm_apply_phase_volts(float va, float vb, float vc)
 }
 
 
+
 // =============================================================================
 // pwm_apply_vq — inverse Park + inverse Clarke voltage output
 //
-// Inputs:
-//
-//   v_q:
-//     q-axis voltage command.
-//     During open-loop bring-up this is a fixed small value, e.g. 1.5 V.
-//     Later this comes from the q-axis current-loop PI controller.
-//
-//   v_d:
-//     d-axis voltage command.
-//     During bring-up this is usually 0.
-//     Later this comes from the d-axis current-loop PI controller.
-//
-//   theta:
-//     electrical angle in radians.
-//     During open-loop bring-up this is a synthetic ramp.
-//     Later this must come from:
-//
-//        theta_elec = pole_pairs * theta_mech + encoder_offset
-//
-// Transform:
-//
-//   [v_d, v_q] + theta_elec
-//        -> inverse Park
-//        -> [v_alpha, v_beta]
-//        -> inverse Clarke
-//        -> [va, vb, vc]
-//        -> centered PWM CCR values
-//
-// This convention has been proven by open-loop rotation.
-// Freeze this math until encoder alignment testing.
+// Convention proven by open-loop rotation. Do not change signs.
 // =============================================================================
 
 void pwm_apply_vq(float v_q, float v_d, float theta)
@@ -336,14 +318,13 @@ void pwm_apply_vq(float v_q, float v_d, float theta)
     float cos_t = cosf(theta);
     float sin_t = sinf(theta);
 
-    // Inverse Park transform.
     float v_alpha = (v_d * cos_t) - (v_q * sin_t);
     float v_beta  = (v_d * sin_t) + (v_q * cos_t);
 
-    // Inverse Clarke transform.
     float va =  v_alpha;
     float vb = -0.5f * v_alpha + 0.86602540378f * v_beta;
     float vc = -0.5f * v_alpha - 0.86602540378f * v_beta;
 
     pwm_apply_phase_volts(va, vb, vc);
+
 }

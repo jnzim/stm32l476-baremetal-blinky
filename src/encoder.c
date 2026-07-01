@@ -159,3 +159,4 @@ void encoder_update(uint32_t timestamp_ms)
     last_position = current;
    
 }
+

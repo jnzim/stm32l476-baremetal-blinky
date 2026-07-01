@@ -1,4 +1,3 @@
-
 #include "stm32f4xx.h"
 
 #include <stdbool.h>
@@ -21,39 +20,19 @@
 #include "current_feedback.h"
 
 
-/* =============================================================================
- * Alignment timing
- *
- * ALIGN_TICKS is counted from SysTick_Handler().
- * SysTick = 1 kHz, so:
- *
- *   1000 ticks = 1.0 second
- *
- * =============================================================================*/
-#define ALIGN_TICKS 1000u
 
 
-/* =============================================================================
- * Bench bring-up voltages
- *
- * These are intentionally modest.
- * Increase only after encoder angle and current feedback look sane.
- * =============================================================================*/
-#define V_ALIGN  3.0f
-#define V_RUN    1.5f
-#define ENC_DIR  (+1.0f)
-
-
-/* =============================================================================
- * FOC / encoder constants
- * =============================================================================*/
-#define FOC_TWO_PI 6.28318530718f
+static float sysid_t     = 0.0f;
+static float sysid_phase = 0.0f;
+static float sysid_f     = SYSID_F_START;
 
 
 typedef enum
 {
     FOC_STAGE_ALIGN = 0,
-    FOC_STAGE_RUN
+    FOC_STAGE_RUN,
+    FOC_STAGE_SYSID,
+    FOC_STAGE_IDLE
 } FocStage;
 
 
@@ -70,17 +49,7 @@ static int32_t  encoder_offset = 0;
  * =============================================================================*/
 volatile uint32_t tick_ms = 0;
 volatile bool     system_initialized = false;
-
-
-/* =============================================================================
- * Original profile/control scaffold state
- * =============================================================================*/
-static uint32_t div_1k = 0;
-static uint32_t div_5k = 0;
-
-static bool     move_in_progress = false;
-static uint32_t prev_count = 0;
-static int32_t  profile_vel_cmd = 0;
+volatile uint32_t tim1_isr_count = 0;
 
 
 /* =============================================================================
@@ -111,6 +80,7 @@ static float foc_vq_applied = 0.0f;
 static float foc_vd_applied = 0.0f;
 
 
+
 /* =============================================================================
  * foc_theta_from_encoder
  *
@@ -135,7 +105,6 @@ static float foc_theta_from_encoder(void)
 
     return theta_elec;
 }
-
 
 /* =============================================================================
  * run_foc_commutation
@@ -167,7 +136,8 @@ static void run_foc_commutation(void)
              * theta = 0
              */
             foc_vq_applied = 0.0f;
-            foc_vd_applied = V_ALIGN;
+            foc_vd_applied = 3.0f;
+            
 
             pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
 
@@ -176,9 +146,10 @@ static void run_foc_commutation(void)
                 /*
                  * Rotor has settled. Capture this encoder count as electrical zero.
                  */
-                encoder_offset = encoder_get_position();
 
-                foc_stage = FOC_STAGE_RUN;
+                encoder_offset = encoder_get_position(); 
+
+                foc_stage = FOC_STAGE_SYSID;
             }
         }
         break;
@@ -197,6 +168,39 @@ static void run_foc_commutation(void)
             foc_vd_applied = 0.0f;
 
             pwm_apply_vq(foc_vq_applied, foc_vd_applied, theta_elec);
+        }
+        break;
+
+        case FOC_STAGE_SYSID:
+        {
+            // Log-linear frequency sweep
+            sysid_f = SYSID_F_START * powf(SYSID_F_END / SYSID_F_START,
+                                            sysid_t / SYSID_DURATION);
+            
+            // Integrate phase to avoid discontinuities
+            sysid_phase += 2.0f * M_PI * sysid_f * SYSID_DT;
+            if (sysid_phase > 2.0f * M_PI) sysid_phase -= 2.0f * M_PI;
+            
+            foc_vd_applied = SYSID_AMPLITUDE * sinf(sysid_phase);
+            foc_vq_applied = 0.0f;
+            pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
+            
+            // Get current feedback
+            current_feedback_get_dq(0.0f, &i_d_meas, &i_q_meas);
+            
+            sysid_t += SYSID_DT;
+            if (sysid_t >= SYSID_DURATION)
+            {
+                foc_stage = FOC_STAGE_IDLE;
+            }
+
+if (foc_stage == FOC_STAGE_SYSID && (tim1_isr_count % 20000) == 0)
+{
+   volatile int testInt;
+   testInt++;
+}
+
+
         }
         break;
 
@@ -226,39 +230,10 @@ void foc_commutation_reset(void)
     foc_vd_applied = 0.0f;
 }
 
-
-/* =============================================================================
- * SysTick_Handler — 1 kHz
- *
- * Runs temporary voltage-mode FOC commutation test and drive state machine.
- * =============================================================================*/
-void SysTick_Handler(void)
-{
-    tick_ms++;
-
-    if (!system_initialized)
-        return;
-
-    run_foc_commutation();
-
-    drive_sm_run();
-}
-
-
-/* =============================================================================
- * TIM1_UP_TIM10_IRQHandler — TIM1 update interrupt
- *
- * Current state:
- *   - update encoder
- *   - non-blocking current feedback read
- *   - low-pass current feedback for telemetry display
- *   - keep old plant/profile/telemetry scaffold
- *
- * Important:
- *   Do not block waiting for DMA inside this ISR.
- * =============================================================================*/
 void TIM1_UP_TIM10_IRQHandler(void)
 {
+    tim1_isr_count++;
+
     TIM1->SR = ~TIM_SR_UIF;
 
     if (!system_initialized)
@@ -266,115 +241,45 @@ void TIM1_UP_TIM10_IRQHandler(void)
 
     encoder_update(tick_ms);
 
-    /*
-     * Non-blocking current feedback update.
-     *
-     * ADC/DMA is currently continuous/free-running.
-     * If a fresh 3-channel scan is available, consume it.
-     * If not, keep using previous measured values.
-     */
-    current_feedback_update();
+    run_foc_commutation();
+
+
+    volatile float theta;
+    if (foc_stage == FOC_STAGE_SYSID)
+    {
+        theta = 0.0f;
+    }
+    else
+    {
+        theta = foc_theta_from_encoder();
+    }
+
+    uint16_t flags = 0;
     if (current_feedback_sample_valid())
     {
-        float theta = foc_theta_from_encoder();
-
         current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
         current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
-
         i_q_plot += 0.02f * (i_q_meas - i_q_plot);
         i_d_plot += 0.02f * (i_d_meas - i_d_plot);
+        flags |= 0x0001u;
     }
 
-    /*
-     * Existing simulated loop scaffold.
-     *
-     * This updates old plant/profile variables.
-     * It does not own the real motor PWM command during this bring-up state.
-     */
-    if (first_sample_ready)
-    {
-        /*
-         * 20 kHz: simulated current loop + plant model
-         */
-        v_q_cmd = pi_step(&current_loop,
-                          iq_cmd - plant.i_q,
-                          1.0f / 20000.0f);
+    int32_t enc_pos = encoder_get_position();
 
-        plant_step(&plant, v_q_cmd, 1.0f / 20000.0f);
-
-        /*
-         * 5 kHz: simulated velocity loop
-         */
-        if (++div_5k >= 4u)
-        {
-            div_5k = 0;
-            float vel_err_rad_sec = vel_cmd_rad_sec - (float)plant.vel_rad;
-            iq_cmd = pi_step(&velocity_loop,vel_err_rad_sec, 1.0f / 5000.0f);
-        }
-    }
-
-    /*
-     * 1 kHz: position loop + trajectory pop + telemetry
-     */
-    if (++div_1k >= 20u)
-    {
-        div_1k = 0;
-
-        /* ---------------------------------------------------------------------
-         * Refill logic
-         * ------------------------------------------------------------------ */
-
-        uint32_t curr_count = ring_count();
-
-        if ((prev_count == 0u) && (curr_count > 0u))                { move_in_progress = true; }
-        if (curr_count == 0u)                                       { move_in_progress = false;}
-        if (move_in_progress && (curr_count < READY_THRESHOLD))     { GPIOC->BSRR = (1u << READY_RING_REFILL); }
-        else                                                        { GPIOC->BSRR = (1u << (READY_RING_REFILL + 16u));}
-
-        prev_count = curr_count;
-
-        /* ---------------------------------------------------------------------
-         * Position loop / telemetry logic
-         * ------------------------------------------------------------------ */
-
-        if (drive_is_servo_on() && (drive.samples_consumed < expected_samples))
-        {
-            TrajSlot s;
-
-          
-            if (ring_pop(&s))
-            {
-                drive.samples_consumed++;
-                first_sample_ready = 1;
-            
-                /*
-                 * Keep the profile command values from the RPi.
-                 *
-                 * During this bring-up stage, these commands are used mainly for telemetry
-                 * and flow-control validation. They do not yet drive the real motor loop.
-                 */
-                profile_vel_cmd = s.vel_cmd;
-            
-                int32_t pos_fbk_real = encoder.position;
-                int32_t vel_fbk_real = encoder.velocity;
-                float pos_err_cnt   = (float)(s.pos_cmd - pos_fbk_real);
-                vel_cmd_rad_sec     = (p_step(&position_loop, pos_err_cnt) / COUNTS_PER_RAD) +
-                                        ((float)profile_vel_cmd / COUNTS_PER_RAD) * FF_GAIN;
-            
-                telem_buf[1].pos_cmd            = s.pos_cmd;
-                telem_buf[1].pos_fbk            = pos_fbk_real;          
-                telem_buf[1].vel_cmd            = (int32_t)s.vel_cmd;
-                telem_buf[1].vel_fbk            = vel_fbk_real;
-                telem_buf[1].timestamp_ms       = tick_ms;
-                telem_buf[1].drive_state        = drive_get_state();
-                telem_buf[1].fault_flags        = drive.fault_flags;
-                telem_buf[1].samples_consumed   = drive.samples_consumed;
-                telem_buf[1].iq_cmd             = 0;
-                telem_buf[1].i_q_fbk            = (int16_t)(i_q_plot * 1000.0f);
-                telem_buf[1].v_q_cmd            = (int16_t)(foc_vq_applied * 1000.0f);
-            }
-        }
-    }
+    spi_sysid_update_latest(
+        (int16_t)(enc_pos >> 16),              /* enc_hi */
+        (int16_t)(enc_pos & 0xFFFF),           /* enc_lo */
+        (int16_t)sysid_f,                      /* sysid_f */
+        (int16_t)(i_d_meas * 1000.0f),         /* id_mA   */
+        (int16_t)(i_q_meas * 1000.0f),         /* iq_mA   */
+        (int16_t)(foc_vd_applied * 1000.0f),   /* vd_mV   */
+        (int16_t)(foc_vq_applied * 1000.0f),   /* vq_mV   */
+        (int16_t)(theta * 1000.0f),            /* theta   */
+        (int16_t)(ia_meas * 1000.0f),          /* adc_a — repurpose for ia */
+        (int16_t)(ib_meas * 1000.0f),          /* adc_b — repurpose for ib */
+        0,
+        flags
+    );
 }
 
 
@@ -383,6 +288,9 @@ void TIM1_UP_TIM10_IRQHandler(void)
  * =============================================================================*/
 int main(void)
 {
+    
+    system_initialized = false;
+
     /*
      * Enable FPU coprocessor.
      */
@@ -393,63 +301,88 @@ int main(void)
      */
     clock_init();
 
-    tim1_init();
+    /*
+     * Do NOT call tim1_init() here.
+     *
+     * pwm_init() owns TIM1:
+     *   - TIM1_CH1/2/3 = phase PWM
+     *   - TIM1_CH4     = ADC injected trigger
+     */
     encoder_init();
     drive_init();
-    spi_init();
-    ring_init();
+spi_init();
+ring_init();
+
+/* Wait for Pi FIRE_SYSID trigger on PC3 (Pi GPIO16) */
+GPIOC->MODER &= ~(3u << (3u * 2u));
+GPIOC->PUPDR &= ~(3u << (3u * 2u));
+GPIOC->PUPDR |=  (1u << (3u * 2u));   /* pull-up */
+
+while (!(GPIOC->IDR & (1u << 3u))) {}  /* wait for high */
+while (GPIOC->IDR & (1u << 3u)) {}     /* wait for low */
+
+
 
     /*
      * DRV8353 initialization.
      */
     drv8353_init();
+
     bool cfg_ok = drv8353_configure();
 
     /*
-     * PWM and current feedback initialization.
+     * Debug readback.
      *
-     * PWM outputs remain disabled until pwm_enable().
+     * Expected:
+     *   csa_ctrl = 0x0283
      */
-    //pwm_init();
+    volatile uint16_t csa_ctrl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
+    csa_ctrl = drv8353_read_reg(DRV8353_REG_CSA_CONTROL);
+   
+     
+    /*
+     * Configure and start TIM1.
+     *
+     * PWM bridge outputs are still disabled because pwm_init()
+     * leaves TIM1 BDTR/MOE cleared.
+     *
+     * TIM1 is running, so TIM1_CC4 can trigger ADC injected conversions.
+     */
+    pwm_init();
+
+
+    /*
+     * Configure ADC current feedback.
+     *
+     * ADC waits for TIM1_CC4.
+     */
     current_feedback_init();
 
     /*
      * Enable DRV before current calibration so current-sense amplifiers are alive.
      *
-     * PWM is still disabled here, so the motor should not be driven.
+     * PWM bridge outputs are still disabled here, so the motor should not be driven.
      */
     drv_enable_high();
 
     /*
-     * Calibrate current feedback zero offsets with PWM disabled.
+     * Calibrate current feedback zero offsets with PWM bridge outputs disabled.
+     *
+     * This requires TIM1 to already be running because calibration waits for
+     * TIM1_CC4-triggered ADC injected samples.
      */
     current_feedback_calibrate();
 
-    /*
-     * Now enable PWM output.
-     */
-    pwm_enable();
 
-    /*
-     * Optional DRV sanity reads.
-     */
-    volatile uint16_t fs1 = drv8353_read_reg(DRV8353_REG_FAULT_STATUS_1);
-    volatile uint16_t vgs = drv8353_read_reg(DRV8353_REG_VGS_STATUS_2);
-    volatile uint16_t dc  = drv8353_read_reg(DRV8353_REG_DRIVER_CONTROL);
+     pwm_enable();
 
-    (void)cfg_ok;
-    (void)fs1;
-    (void)vgs;
-    (void)dc;
+    
 
-    /*
-     * Start 1 kHz SysTick only after PWM/DRV/current feedback are ready.
-     */
+    /* Start 1 kHz SysTick only after PWM/DRV/current feedback are ready.*/
     SysTick_Config(SystemCoreClock / 1000u);
 
-    /*
-     * Allow interrupt handlers to start doing work.
-     */
+    // Allow interrupt handlers to start doing work.
+
     system_initialized = true;
 
     while (1)
