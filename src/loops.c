@@ -31,7 +31,8 @@ void loops_reset(void)
 {
 
 
-    pi_init(&current_loop, 12.8f, 19478.0f, -10.0f, 10.0f);
+    //pi_init(&current_loop, 3, 0.0f, -10.0f, 10.0f);
+    pi_init(&current_loop, 3.0f, 5.0f, -12.0f, 12.0f);
     pi_init(&velocity_loop, 0.01f, 0.2f, -10.0f, 10.0f);
     p_init(&position_loop, 0.8f);
 
@@ -53,5 +54,5 @@ void open_loop_step(float *theta, float v_mag, float d_theta)
 {
     *theta += d_theta;
     if (*theta >= 2.0f * M_PI) *theta -= 2.0f * M_PI;
-    pwm_apply_vq(v_mag, 0.0f, *theta);
+    pwm_apply_dq(0.0f, v_mag, *theta);
 }

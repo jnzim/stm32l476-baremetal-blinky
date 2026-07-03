@@ -49,12 +49,23 @@
 // Current sensing
 // =============================================================================
 
-#define SHUNT_R          0.007f
-#define SHUNT_GAIN       20.0f
+// #define SHUNT_R          0.007f
+// #define SHUNT_GAIN       20.0f
+// #define VREF             3.3f
+// #define ADC_COUNTS       4096.0f
+// #define ADC_ZERO         2048.0f
+// #define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
+// #define ADC_SMP_84_CYCLES  4u
+
+
+#define SHUNT_R          0.007f      // 7mΩ shunt resistor
+#define CSA_GAIN         40.0f       // DRV8353 CSA gain register = 11b
+#define DIVIDER_RATIO    (9.76f / (383.0f + 9.76f))   // R7/(R1+R7) = 0.02484
+#define SHUNT_GAIN  (CSA_GAIN * DIVIDER_RATIO * 2.0f)  // ×2 for single-ended vs differential
 #define VREF             3.3f
 #define ADC_COUNTS       4096.0f
 #define ADC_ZERO         2048.0f
-#define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
+#define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_GAIN))  // = 0.000806 A/count
 #define ADC_SMP_84_CYCLES  4u
 
 // =============================================================================

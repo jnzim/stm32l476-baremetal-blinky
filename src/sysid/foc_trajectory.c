@@ -75,11 +75,9 @@ void foc_trajectory_step(void)
         // ---------------------------------------------------------------------
         case TRAJ_STAGE_ALIGN:
         {
-            // Force d-axis at electrical zero to establish encoder reference.
-            // Same pattern as sysid align — proven to pull rotor cleanly.
             foc_vd_applied = V_ALIGN;
             foc_vq_applied = 0.0f;
-            pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
+            pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
 
             if (++traj_align_tick >= ALIGN_TICKS)
             {
@@ -93,13 +91,9 @@ void foc_trajectory_step(void)
         // ---------------------------------------------------------------------
         case TRAJ_STAGE_RUN:
         {
-            // Wait for SysTick to pop the first trajectory sample before
-            // closing any loops — avoids driving against a zero setpoint.
             if (!first_sample_ready)
                 return;
 
-            // Require fresh ADC sample — skip tick if ADC not ready.
-            // Previous PWM command holds; no glitch.
             if (!current_feedback_sample_valid())
                 return;
 
@@ -110,26 +104,25 @@ void foc_trajectory_step(void)
             current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
             // ── Velocity loop @ 5 kHz ────────────────────────────────────────
-            // vel_cmd_rad_sec is written by SysTick position loop at 1 kHz.
-            // encoder.velocity is counts/sec, updated by encoder_update()
-            // which is called at the top of TIM1_UP_TIM10_IRQHandler before
-            // dispatching here.
-            if (++vel_div >= 4u)
-            {
-                vel_div = 0u;
-                float vel_fbk_rad = (float)encoder_get_velocity() / COUNTS_PER_RAD;
-                iq_cmd = pi_step(&velocity_loop,
-                                 vel_cmd_rad_sec - vel_fbk_rad,
-                                 DT_VELOCITY);
-            }
+            // if (++vel_div >= 4u)
+            // {
+            //     vel_div = 0u;
+            //     float vel_fbk_rad = (float)encoder_get_velocity() / COUNTS_PER_RAD;
+            //     iq_cmd = pi_step(&velocity_loop,
+            //                      vel_cmd_rad_sec - vel_fbk_rad,
+            //                      DT_VELOCITY);
+            // }
 
             // ── Current loop @ 20 kHz ────────────────────────────────────────
+            foc_vd_applied = 0.0f;
             foc_vq_applied = pi_step(&current_loop,
                                      iq_cmd - i_q_meas,
                                      DT_CURRENT);
-            foc_vd_applied = 0.0f;
-
-            pwm_apply_vq(foc_vq_applied, foc_vd_applied, theta);
+            if( foc_vq_applied > 0 )
+            {
+                volatile float testVar = foc_vq_applied;
+            }
+            pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
         }
         break;
     }
@@ -145,10 +138,8 @@ void foc_trajectory_reset(void)
     traj_align_tick = 0;
     traj_enc_offset = 0;
 
-    foc_vq_applied = 0.0f;
     foc_vd_applied = 0.0f;
+    foc_vq_applied = 0.0f;
 
-    // loops_reset() will be called again when align completes —
-    // calling here too ensures a clean state if reset mid-move
     loops_reset();
 }

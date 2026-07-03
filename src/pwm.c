@@ -44,12 +44,10 @@
 //   TIM1 CR2 MMS=111 routes OC4REF as TRGO.
 //   ADC JEXTSEL=1 selects TIM1_TRGO as injected trigger.
 //   CCR4 controls exactly when in the PWM cycle the ADC samples.
-//   CCR4 = PWM_CENTER places the sample at the midpoint of the on-time.
 //
-// Bring-up status:
-//   pwm_apply_vq() convention has been proven with open-loop voltage-vector
-//   rotation. Do not change signs casually. Encoder alignment is the next place
-//   where convention/offset must be handled.
+// Convention:
+//   pwm_apply_dq(vd, vq, theta) — (vd, vq, theta) matches inverse Park directly.
+//   Do not swap argument order. Do not change signs in the transform.
 
 #include "pwm.h"
 #include "board_f411.h"
@@ -66,14 +64,6 @@
 
 #define PWM_ARR      2499u
 #define PWM_CENTER   (PWM_ARR / 2u)
-
-
-// =============================================================================
-// Bus voltage
-//
-// Set this to match the bench supply.
-// During bring-up this has been 12 V.
-// =============================================================================
 
 
 void pwm_init(void)
@@ -155,7 +145,6 @@ void pwm_init(void)
     //   OC4REF is HIGH when counter < CCR4.
     //   TRGO (MMS=111) fires on OC4REF rising edge.
     //   In center-aligned mode, OC4REF rises at CCR4 count on the way DOWN.
-    //   CCR4 = PWM_CENTER places the trigger at mid-cycle quiet point.
     // -------------------------------------------------------------------------
 
     TIM1->CCMR1 =
@@ -179,22 +168,15 @@ void pwm_init(void)
     // -------------------------------------------------------------------------
     // TIM1 CH4 ADC trigger
     //
-    // CCR4 = PWM_CENTER: OC4REF rises at count=1249 on the way down.
-    // This is the mid-cycle quiet point for current sampling.
-    // Adjust CCR4 to move the sample point if needed.
+    // CCR4 = PWM_ARR - PWM_SAMPLE_OFFSET: fires just after PWM peak on way down.
+    // This places the sample in the low-side conduction window.
     // -------------------------------------------------------------------------
 
-    // Was:
-    TIM1->CCR4 = PWM_CENTER;   // fires at mid-cycle — high-side window, wrong
+    //#define PWM_SAMPLE_OFFSET  250u
+      #define PWM_SAMPLE_OFFSET  50u
+    TIM1->CCR4 = PWM_ARR - PWM_SAMPLE_OFFSET;   // = 2449
+    //TIM1->CCR4 = PWM_SAMPLE_OFFSET;   // trigger 2.5µs after valley, CSA settled
 
-    // Fix:
-    #define PWM_SAMPLE_OFFSET  50u
-    TIM1->CCR4 = PWM_ARR - PWM_SAMPLE_OFFSET;   // = 2449, fires just after peak on way down
-
-    // -------------------------------------------------------------------------
-    // Enable CH1/CH2/CH3 outputs and CH4 compare event.
-    // CC4E must be set even though CH4 drives no GPIO pin.
-    // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------
     // Enable CH1/CH2/CH3 outputs and CH4 compare event.
@@ -282,8 +264,6 @@ uint16_t volts_to_duty(float v)
 
     uint16_t ccr = (uint16_t)(normalized * (float)PWM_CENTER + (float)PWM_CENTER);
 
-    // Clamp to ~4-96% to guarantee low-side window >= ADC acquisition time.
-    // At ARR=2499: 4% = 100 counts, 96% = 2399 counts.
 #define DUTY_MIN  100u
 #define DUTY_MAX  2399u
 
@@ -306,14 +286,24 @@ void pwm_apply_phase_volts(float va, float vb, float vc)
 }
 
 
-
 // =============================================================================
-// pwm_apply_vq — inverse Park + inverse Clarke voltage output
+// pwm_apply_dq — inverse Park + inverse Clarke voltage output
 //
-// Convention proven by open-loop rotation. Do not change signs.
+// Convention: pwm_apply_dq(vd, vq, theta)
+//
+// Inverse Park:
+//   v_alpha = vd*cos(θ) - vq*sin(θ)
+//   v_beta  = vd*sin(θ) + vq*cos(θ)
+//
+// Inverse Clarke (amplitude-invariant):
+//   va =  v_alpha
+//   vb = -0.5*v_alpha + (√3/2)*v_beta
+//   vc = -0.5*v_alpha - (√3/2)*v_beta
+//
+// Do not swap vd/vq. Do not change signs.
 // =============================================================================
 
-void pwm_apply_vq(float v_q, float v_d, float theta)
+void pwm_apply_dq(float v_d, float v_q, float theta)
 {
     float cos_t = cosf(theta);
     float sin_t = sinf(theta);
@@ -326,5 +316,4 @@ void pwm_apply_vq(float v_q, float v_d, float theta)
     float vc = -0.5f * v_alpha - 0.86602540378f * v_beta;
 
     pwm_apply_phase_volts(va, vb, vc);
-
 }

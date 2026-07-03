@@ -45,9 +45,9 @@ static float sysid_f     = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_SETTLE_TICKS  20000u    // 1 s at 20 kHz — let align field decay
-#define CL_STEP_HOLD_TICKS    20000u    // 1 s step hold — enough for full settling
-#define CL_STEP_AMPLITUDE     1.0f      // A — iq step magnitude, keep modest
+#define CL_STEP_AMPLITUDE    1.0
+#define CL_STEP_HOLD_TICKS   4000u    // 200ms at 20 kHz
+#define CL_STEP_SETTLE_TICKS 4000u    // 200ms at 20 kHz
 
 typedef enum
 {
@@ -107,7 +107,7 @@ static void run_chirp(void)
     foc_vd_applied = SYSID_AMPLITUDE * sinf(sysid_phase);
     foc_vq_applied = 0.0f;
 
-    pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
+    pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
 
     // Current feedback at theta=0 (d-axis locked)
     current_feedback_get_dq(0.0f, &i_d_meas, &i_q_meas);
@@ -122,7 +122,7 @@ static void run_chirp(void)
 //
 // Current loop is closed. iq_cmd steps from 0 -> CL_STEP_AMPLITUDE -> 0.
 // vd = 0, theta from encoder.
-// Logs iq_ref / iq_meas / vq_applied via spi_sysid_update_latest().
+// Logs iq_cmd / iq_meas / vq_applied via spi_sysid_update_latest().
 // =============================================================================
 
 static void run_cl_step(void)
@@ -140,7 +140,6 @@ static void run_cl_step(void)
     switch (cl_step_phase)
     {
         case CL_STEP_SETTLE:
-            // iq_cmd = 0, loop closed, wait for transients from align to decay
             iq_cmd = 0.0f;
             if (++cl_step_tick >= CL_STEP_SETTLE_TICKS)
             {
@@ -171,17 +170,18 @@ static void run_cl_step(void)
         case CL_STEP_DONE:
         default:
             iq_cmd         = 0.0f;
-            foc_vq_applied = 0.0f;
             foc_vd_applied = 0.0f;
-            pwm_apply_vq(0.0f, 0.0f, theta);
+            foc_vq_applied = 0.0f;
+            pwm_apply_dq(0.0f, 0.0f, theta);
             return;
     }
 
-    // Current loop @ 20 kHz — Kp/Ki from loops_reset(), tuned from sysid params
-    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
+    // Current loop @ 20 kHz
     foc_vd_applied = 0.0f;
+    foc_vq_applied = pi_step(&current_loop, -(iq_cmd - i_q_meas), SYSID_DT);
+    
 
-    pwm_apply_vq(foc_vq_applied, foc_vd_applied, theta);
+    pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
 }
 
 // =============================================================================
@@ -195,14 +195,14 @@ void foc_sysid_step(void)
         // ---------------------------------------------------------------------
         case SYSID_STAGE_ALIGN:
         {
-            // Force d-axis at electrical zero to establish encoder reference.
             foc_vd_applied = V_ALIGN;
             foc_vq_applied = 0.0f;
-            pwm_apply_vq(foc_vq_applied, foc_vd_applied, 0.0f);
+            pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
 
             if (++sysid_align_tick >= ALIGN_TICKS)
             {
                 sysid_enc_offset = encoder_get_position();
+                loops_reset();
                 sysid_stage      = SYSID_STAGE_RUN;
             }
         }
@@ -222,24 +222,19 @@ void foc_sysid_step(void)
         // ---------------------------------------------------------------------
         case SYSID_STAGE_IDLE:
         {
-            // Test complete. Hold zero voltage. RPi data reader drains remainder.
-            foc_vq_applied = 0.0f;
             foc_vd_applied = 0.0f;
-            pwm_apply_vq(0.0f, 0.0f, 0.0f);
+            foc_vq_applied = 0.0f;
+            pwm_apply_dq(0.0f, 0.0f, 0.0f);
         }
         break;
     }
 
     // -------------------------------------------------------------------------
     // Telemetry — written every ISR tick regardless of stage.
-    // RPi sysid reader ingests this stream at 10 kHz via separate project.
-    // sysid_f is repurposed as step phase indicator in CL_STEP mode.
     // -------------------------------------------------------------------------
 
     uint16_t flags = (uint16_t)sysid_stage;
 
-    // In CL_STEP mode theta is live from the encoder; in chirp theta=0 (d-axis locked).
-    // Compute here so it's available for the telemetry call in both modes.
 #if SYSID_TEST == SYSID_TEST_CL_STEP
     float theta_telem = foc_theta_from_encoder();
 #else
@@ -248,20 +243,24 @@ void foc_sysid_step(void)
 
     int32_t enc_pos = encoder_get_position();
 
-    spi_sysid_update_latest(
-        (int16_t)(enc_pos >> 16),              /* enc_hi */
-        (int16_t)(enc_pos & 0xFFFF),           /* enc_lo */
-        (int16_t)sysid_f,                      /* sysid_f */
-        (int16_t)(i_d_meas * 1000.0f),         /* id_mA   */
-        (int16_t)(i_q_meas * 1000.0f),         /* iq_mA   */
-        (int16_t)(foc_vd_applied * 1000.0f),   /* vd_mV   */
-        (int16_t)(foc_vq_applied * 1000.0f),   /* vq_mV   */
-        (int16_t)(theta_telem * 1000.0f),      /* theta   */
-        (int16_t)(ia_meas * 1000.0f),          /* adc_a — repurpose for ia */
-        (int16_t)(ib_meas * 1000.0f),          /* adc_b — repurpose for ib */
-        0,
-        flags
-    );
+spi_sysid_update_latest(
+    (int16_t)(enc_pos >> 16),              /* enc_hi        */
+    (int16_t)(enc_pos & 0xFFFF),           /* enc_lo        */
+#if SYSID_TEST == SYSID_TEST_CHIRP
+    (int16_t)(sysid_f),                    /* sysid_f       — Bode uses this */
+#elif SYSID_TEST == SYSID_TEST_CL_STEP
+    (int16_t)(iq_cmd * 1000.0f),           /* iq_cmd_mA     — step uses this */
+#endif
+    (int16_t)(i_d_meas * 1000.0f),         /* id_mA         */
+    (int16_t)(i_q_meas * 1000.0f),         /* iq_mA         */
+    (int16_t)(foc_vd_applied * 1000.0f),   /* vd_mV         */
+    (int16_t)(foc_vq_applied * 1000.0f),   /* vq_mV         */
+    (int16_t)(theta_telem * 1000.0f),      /* theta         */
+    (int16_t)(ia_meas * 1000.0f),          /* ia_mA         */
+    (int16_t)(ib_meas * 1000.0f),          /* ib_mA         */
+    0,
+    flags
+);
 }
 
 // =============================================================================
@@ -282,8 +281,8 @@ void foc_sysid_reset(void)
     cl_step_tick  = 0;
 
     iq_cmd         = 0.0f;
-    foc_vq_applied = 0.0f;
     foc_vd_applied = 0.0f;
+    foc_vq_applied = 0.0f;
 
     ia_meas = ib_meas = ic_meas = 0.0f;
     i_d_meas = i_q_meas = 0.0f;
