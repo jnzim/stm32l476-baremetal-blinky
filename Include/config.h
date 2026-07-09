@@ -14,7 +14,7 @@
 
 #define SYSID_TEST_CHIRP    0
 #define SYSID_TEST_CL_STEP  1
-#define SYSID_TEST          SYSID_TEST_CHIRP
+#define SYSID_TEST          SYSID_TEST_CL_STEP
 
 // =============================================================================
 // Math
@@ -58,14 +58,23 @@
 // #define ADC_SMP_84_CYCLES  4u
 
 
-#define SHUNT_R          0.007f      // 7mΩ shunt resistor
-#define CSA_GAIN         40.0f       // DRV8353 CSA gain register = 11b
-#define DIVIDER_RATIO    (9.76f / (383.0f + 9.76f))   // R7/(R1+R7) = 0.02484
-#define SHUNT_GAIN  (CSA_GAIN * DIVIDER_RATIO * 2.0f)  // ×2 for single-ended vs differential
+// #define SHUNT_R          0.007f      // 7mΩ shunt resistor
+// #define CSA_GAIN         40.0f       // DRV8353 CSA gain register = 11b
+// #define DIVIDER_RATIO    (9.76f / (383.0f + 9.76f))   // R7/(R1+R7) = 0.02484
+// #define SHUNT_GAIN  (CSA_GAIN * DIVIDER_RATIO * 2.0f)  // ×2 for single-ended vs differential
+// #define VREF             3.3f
+// #define ADC_COUNTS       4096.0f
+// #define ADC_ZERO         2048.0f
+// #define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_GAIN))  // = 0.000806 A/count
+// #define ADC_SMP_84_CYCLES  4u
+
+
+#define SHUNT_R          0.007f
+#define SHUNT_GAIN       40.0f
 #define VREF             3.3f
 #define ADC_COUNTS       4096.0f
 #define ADC_ZERO         2048.0f
-#define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_GAIN))  // = 0.000806 A/count
+#define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
 #define ADC_SMP_84_CYCLES  4u
 
 // =============================================================================
@@ -80,8 +89,8 @@
 // FOC bring-up voltages
 // =============================================================================
 
-#define V_ALIGN  3.0f
-#define V_RUN    3.0f
+#define V_ALIGN  1.5f
+#define V_RUN    1.0f
 #define ENC_DIR  (+1.0f)
 #define FF_GAIN  0.95f
 
@@ -89,13 +98,13 @@
 // Alignment timing — ALIGN_TICKS at 20 kHz = 100 ms
 // =============================================================================
 
-#define ALIGN_TICKS  2000u
+#define ALIGN_TICKS  100000u
 
 // =============================================================================
 // Sysid chirp parameters
 // =============================================================================
 
-#define SYSID_AMPLITUDE  1.0f
+#define SYSID_AMPLITUDE  0.5f
 #define SYSID_F_START    1.0f
 #define SYSID_F_END      2000.0f
 #define SYSID_DURATION   20.0f
