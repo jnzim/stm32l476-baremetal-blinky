@@ -45,7 +45,7 @@ static float sysid_f     = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_AMPLITUDE    0.2      // A
+#define CL_STEP_AMPLITUDE    0.5      // A
 #define CL_STEP_HOLD_TICKS   1000u    // 50ms at 20 kHz
 #define CL_STEP_SETTLE_TICKS 1000u    // 50ms at 20 kHz
 
@@ -209,7 +209,7 @@ void foc_sysid_step(void)
             foc_vq_applied = 0.0f;
             pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
 
-            if (++sysid_align_tick >= 40000)
+            if (++sysid_align_tick >= 2000)
             {
                 sysid_enc_offset = encoder_get_position();
                 loops_reset();
