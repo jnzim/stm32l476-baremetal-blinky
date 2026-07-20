@@ -229,9 +229,9 @@ void pwm_set_duty(uint8_t phase, uint16_t duty)
 
     switch (phase)
     {
-        case 0: TIM1->CCR3 = duty; break;
-        case 1: TIM1->CCR2 = duty; break;
-        case 2: TIM1->CCR1 = duty; break;
+        case 0: TIM1->CCR1 = duty; break;
+        case 1: TIM1->CCR3 = duty; break;
+        case 2: TIM1->CCR2 = duty; break;
         default: break;
     }
 }
@@ -265,6 +265,7 @@ uint16_t volts_to_duty(float v)
 
 void pwm_apply_phase_volts(float va, float vb, float vc)
 {
+    
     pwm_set_duty(0, volts_to_duty(va));
     pwm_set_duty(1, volts_to_duty(vb));
     pwm_set_duty(2, volts_to_duty(vc));

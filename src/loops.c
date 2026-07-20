@@ -31,8 +31,8 @@ void loops_reset(void)
 {
 
 
-    //pi_init(&current_loop, 3, 0.0f, -10.0f, 10.0f);
-    pi_init(&current_loop, 7.78f, 11153.0f, -12.0f, 12.0f);
+    pi_init(&current_loop, 3.86, 5561.0f, -10.0f, 10.0f);
+    //pi_init(&current_loop, 7.78f, 11153.0f, -12.0f, 12.0f);
     pi_init(&velocity_loop, 0.01f, 0.2f, -10.0f, 10.0f);
     p_init(&position_loop, 0.8f);
 

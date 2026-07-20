@@ -42,8 +42,10 @@ void TIM1_UP_TIM10_IRQHandler(void)
 int main(void)
 {
     system_initialized = false;
-
+    
+    // Enable full access to FPU coprocessors CP10 and CP11. */
     SCB->CPACR |= ((3UL << (10u * 2u)) | (3UL << (11u * 2u)));
+    
 
     clock_init();
     encoder_init();
