@@ -225,11 +225,7 @@ static void run_vel_chirp(void)
         iq_cmd = 0.0f;
 
         foc_vd_applied = 0.0f;
-        foc_vq_applied = pi_step(
-            &current_loop,
-            -(iq_cmd - i_q_meas),
-            SYSID_DT
-        );
+        foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
 
         pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
 
@@ -238,15 +234,12 @@ static void run_vel_chirp(void)
     }
     
 
-    if (!current_feedback_sample_valid())
-        return;
+    if (!current_feedback_sample_valid()) {return; }
 
     current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
     current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
-    sysid_f = VEL_CHIRP_F_START *
-              powf(VEL_CHIRP_F_END / VEL_CHIRP_F_START,
-                   sysid_t / VEL_CHIRP_DURATION);
+    sysid_f = VEL_CHIRP_F_START * powf(VEL_CHIRP_F_END / VEL_CHIRP_F_START, sysid_t / VEL_CHIRP_DURATION);
 
     // advance the sine angle  by the correct amount on every 20 kHz control tick:               
     chirp_angle_rad += FOC_TWO_PI * sysid_f * SYSID_DT;
@@ -259,7 +252,7 @@ static void run_vel_chirp(void)
     foc_vd_applied = 0.0f;
 
     /* Preserve the sign convention confirmed by the current-step test. */
-    foc_vq_applied = pi_step(&current_loop, -(iq_cmd - i_q_meas),SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas,SYSID_DT);
 
     pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
 
@@ -389,7 +382,7 @@ static void run_vel_stepped_sine(void)
 
     foc_vd_applied = 0.0f;
 
-    foc_vq_applied = pi_step(&current_loop,-(iq_cmd - i_q_meas),SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop,iq_cmd - i_q_meas, SYSID_DT);
 
     pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
 }
@@ -466,7 +459,7 @@ static void run_cl_step(void)
 
     // Current loop @ 20 kHz
     foc_vd_applied = 0.0f;
-    foc_vq_applied = pi_step(&current_loop, (iq_cmd - i_q_meas), SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
     
 
     pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);

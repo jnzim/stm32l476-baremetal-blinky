@@ -17,7 +17,7 @@
 #define SYSID_TEST_VEL_CHIRP     2
 #define SYSID_STEP_SINE          3
 
-#define SYSID_TEST SYSID_TEST_CL_STEP
+#define SYSID_TEST SYSID_TEST_VEL_CHIRP
 
 // =============================================================================
 // Math
@@ -108,6 +108,6 @@
 // #define VEL_CHIRP_DURATION   20.0f   // seconds
 
 #define VEL_CHIRP_F_START    2.0f
-#define VEL_CHIRP_F_END     30.0f
-#define VEL_CHIRP_DURATION  20.0f
+#define VEL_CHIRP_F_END     100.0f
+#define VEL_CHIRP_DURATION  100.0f
 #define VEL_CHIRP_AMPLITUDE  0.1f
