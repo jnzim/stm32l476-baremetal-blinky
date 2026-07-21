@@ -15,8 +15,6 @@ void spi_update_telem(const TelemetryFrame *frame);
 void spi2_dma_arm_test_tx(void);
 
 
-
-
 void spi_sysid_update_latest(int16_t ia_mA,
                              int16_t ib_mA,
                              int16_t ic_mA,

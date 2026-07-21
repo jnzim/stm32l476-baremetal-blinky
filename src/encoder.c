@@ -21,6 +21,18 @@ volatile EncoderState encoder = {0, 0, 0};
 static int32_t last_position = 0;
 
 
+// ---------------------------------------------------------------------------
+// Velocity filter config
+// ---------------------------------------------------------------------------
+#define VEL_FILTER_N  80   // 20 ticks @ 20 kHz = 4 ms window
+                           // resolution: 1 count/ms = 0.767 rad/s
+                           // at 10 rad/s -> approximately 13 counts/ms
+
+static int32_t  delta_buf[VEL_FILTER_N] = {0};
+static uint32_t vel_buf_idx             = 0;
+static int32_t  delta_sum               = 0;
+
+
 // =============================================================================
 // encoder_init
 // Call once at startup after system clock setup.
@@ -139,24 +151,26 @@ void encoder_zero(void)
     encoder.velocity = 0;
 }
 
-
-// =============================================================================
-// encoder_update
-// Call from TIM1 ISR at 20 kHz.
-// Reads TIM2 counter, computes dx/dt, updates encoder struct.
-//
-// velocity = delta_counts * sample_rate_hz
-// =============================================================================
+// ---------------------------------------------------------------------------
+// encoder_update — call from TIM1 ISR at 20 kHz
+// ---------------------------------------------------------------------------
 void encoder_update(uint32_t timestamp_ms)
 {
-    int32_t current         = (int32_t)ENC_TIM->CNT;
-    int32_t delta           = current - last_position;
+    int32_t current = (int32_t)ENC_TIM->CNT;
+    int32_t delta   = current - last_position;
 
-    encoder.position        = current;
-    encoder.velocity        = delta * ENC_SAMPLE_HZ;
-    encoder.timestamp_ms    = timestamp_ms;
+    encoder.position     = current;
+    encoder.timestamp_ms = timestamp_ms;
+
+    // Rolling moving average over VEL_FILTER_N samples
+    delta_sum                -= delta_buf[vel_buf_idx];
+    delta_buf[vel_buf_idx]    = delta;
+    delta_sum                += delta;
+    vel_buf_idx               = (vel_buf_idx + 1) % VEL_FILTER_N;
+
+    // velocity [counts/s] — averaged delta scaled to per-second
+    encoder.velocity = (delta_sum * ENC_SAMPLE_HZ) / VEL_FILTER_N;
 
     last_position = current;
-   
 }
 

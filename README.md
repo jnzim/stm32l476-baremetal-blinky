@@ -1,119 +1,343 @@
-# stm32-servo-drive
+# Motion Controller Architecture
 
-Bare metal STM32F446RE servo drive firmware. Closes FOC current, velocity, and position control loops from scratch — no HAL, no RTOS, no commercial drive.
+## Overview
 
-Companion trajectory streamer: [servo-trajectory-streamer](https://github.com/jnzim/servo-trajectory-streamer)
+This is a single-axis BLDC servo drive running on an STM32F411RE Nucleo. The Raspberry Pi 5
+generates a trajectory and streams it over SPI. The STM32 closes three nested control loops
+in real time and streams telemetry back to the Pi.
 
----
+There is no traditional main loop. After startup, `main()` sleeps forever in `while(1){}`.
+All work happens in three interrupt handlers firing on independent schedules.
 
-## What it does
-
-- Receives trapezoidal trajectory samples from Raspberry Pi over SPI2 + DMA
-- Buffers 4096 samples in a ring buffer, asserts PC13 READY for refill at 2048
-- Runs three rate-divided control loops in a single hard-RT ISR hierarchy
-- Simulated DC motor plant model (see [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md)) for software validation before hardware bring-up
-- Streams 32-byte telemetry frames back to Pi on every SPI transaction
-- Telemetry includes position command, position feedback, velocity feedback, position error, q-axis current, q-axis voltage, samples consumed
-- 3-phase complementary PWM output via TIM1 — DRV8353RS-EVM gate driver
+The board also doubles as a system-identification rig: in this mode the STM32 generates
+chirp/sysid profiles onboard directly into the loop (rather than following Pi-streamed
+trajectory samples) and streams telemetry back to the Pi at 10kHz instead of 1kHz. Same
+firmware, same three nested loops — just a different source feeding the loop and a
+different telemetry rate, selected by configuration.
 
 ---
 
 ## Hardware
 
-- STM32F446RE Nucleo-64
-- DRV8353RS-EVM gate driver (15A/20A peak, 9–95V, integrated 3-shunt current sensing)
-- Kollmorgen AKM11E-ANCN2-00 BLDC servo motor (N2 option — incremental encoder only)
-- 2048 CPR quadrature encoder (TIM5, 4x decode = 8192 counts/rev)
-- Raspberry Pi 4/5 as trajectory supervisor via SPI2
+### MCU
+- **STM32F411RE** on Nucleo-64
+- 100MHz, Cortex-M4 with FPU
+- Nucleo-64 morpho pinout image (F411RE label) is the correct physical reference
+
+### Parts to Order / BOM
+
+| Part               | Description                                      | Qty |
+|--------------------|--------------------------------------------------|-----|
+| NUCLEO-F411RE      | STM32F411RE Nucleo-64 board                      | 1   |
+| MAX3096CPE+        | 3.3V quad differential line receiver (encoder)  | 1   |
+| 120Ω resistor      | Line termination                                 | 2   |
+| 0.1µF ceramic cap  | Bypass cap                                       | 1   |
+| 10µF cap           | Bulk bypass cap                                  | 1   |
 
 ---
 
-## Pin Mapping
+## Pin Assignment — Complete Map
 
-| Peripheral          | Pins                          | Notes                        |
-|---------------------|-------------------------------|------------------------------|
-| TIM1 PWM 3-phase    | PA8/PA7, PA9/PB0, PA10/PB1   | Center-aligned complementary |
-| TIM5 encoder        | PA0, PA1                      | 32-bit quadrature counter    |
-| ADC1 current sense  | PA4, PC1, PC4                 | Triggered at TIM1 peak       |
-| SPI1 DRV8353RS      | PA5, PA6, PB5, PB6            | Gate driver config           |
-| SPI2 Raspberry Pi   | PB12, PB13, PB14, PB15        | Trajectory + telemetry       |
-| PC13 READY          | PC13                          | Active low refill signal     |
+| STM32 Pin | Nucleo Header | Function          | Peripheral       |
+|-----------|---------------|-------------------|------------------|
+| PA0       | CN8 pin 1     | Encoder A         | TIM5 CH1         |
+| PA1       | CN8 pin 2     | Encoder B         | TIM5 CH2         |
+| PA4       | CN8 pin 5     | Current sense PhA | ADC1 CH4         |
+| PA5       | CN10 pin 11   | SPI1 SCLK         | SPI1             |
+| PA6       | CN10 pin 13   | SPI1 MISO         | SPI1             |
+| PA7       | CN5 pin 4     | TIM1 CH1N         | PWM Phase A low  |
+| PA8       | CN9 pin 8     | TIM1 CH1          | PWM Phase A high |
+| PA9       | CN5 pin 1     | TIM1 CH2          | PWM Phase B high |
+| PA10      | CN9 pin 3     | TIM1 CH3          | PWM Phase C high |
+| PB0       | CN8 pin 3     | TIM1 CH2N         | PWM Phase B low  |
+| PB1       | CN10 pin 24   | TIM1 CH3N         | PWM Phase C low  |
+| PB5       | CN9 pin 5     | SPI1 MOSI         | SPI1             |
+| PB6       | CN5 pin 3     | SPI1 CS           | SPI1             |
+| PB8       | CN10 pin 3    | ENABLE            | GPIO output      |
+| PB12      | CN7 pin 2     | SPI2 NSS          | SPI2             |
+| PB13      | CN7 pin 4     | SPI2 SCK          | SPI2             |
+| PB14      | CN7 pin 6     | SPI2 MISO         | SPI2             |
+| PB15      | CN7 pin 8     | SPI2 MOSI         | SPI2             |
+| PC1       | CN8 pin 6     | Current sense PhB | ADC1 CH11        |
+| PC4       | TBD           | Current sense PhC | ADC1 CH14        |
+| PC6       | CN10 pin 4    | nFAULT            | GPIO input       |
+| PC13      | CN7 pin 23    | READY to Pi       | GPIO output      |
 
 ---
 
-## Control Loop Architecture
+## Hardware Wiring
+
+### Pi 5 ↔ STM32 (SPI2 + READY)
+
+| Pi 5 Pin | Pi 5 Signal  | Wire Color | STM32 Pin | Nucleo Header | STM32 Function     |
+|----------|--------------|------------|-----------|---------------|--------------------|
+| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | CN7 pin 28     | SPI2 MOSI          |
+| Pin 9    | GND          | Black      | —         | J1 pin 3 (EVM) | GND common         |
+| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | CN7 pin 26     | SPI2 MISO          |
+| Pin 22   | GPIO 25      | Green      | PC13      | CN7 pin 23     | READY (active low) |
+| Pin 23   | GPIO 11 SCK  | Red        | PB13      | CN7 pin 30     | SPI2 SCK           |
+| Pin 26   | GPIO 7 CE1   | Brown      | PB12      | CN7 pin 2      | SPI2 NSS           |
+
+### STM32 ↔ DRV8353RS-EVM (3-phase PWM)
+
+| STM32 Pin | Nucleo Header | TIM1 Channel | DRV8353RS-EVM Pin | Phase       |
+|-----------|---------------|--------------|-------------------|-------------|
+| PA8       | CN9 pin 8     | CH1          | J2 pin 2 (INHA)   | A high-side |
+| PA7       | CN5 pin 4     | CH1N         | J2 pin 4 (INLA)   | A low-side  |
+| PA9       | CN5 pin 1     | CH2          | J2 pin 6 (INHB)   | B high-side |
+| PB0       | CN8 pin 3     | CH2N         | J2 pin 8 (INLB)   | B low-side  |
+| PA10      | CN9 pin 3     | CH3          | J2 pin 10 (INHC)  | C high-side |
+| PB1       | CN10 pin 24   | CH3N         | J2 pin 12 (INLC)  | C low-side  |
+
+All PWM pins AF1 (TIM1). Dead time handled by DRV8353RS TDRIVE VGS monitoring.
+
+### STM32 ↔ DRV8353RS-EVM (SPI1 — gate driver config)
+
+| STM32 Pin | Nucleo Header | SPI1 Function | DRV8353RS-EVM Pin |
+|-----------|---------------|---------------|-------------------|
+| PA5       | CN10 pin 11   | SCLK          | J1 pin 14 (SCLK)  |
+| PA6       | CN10 pin 13   | MISO          | J1 pin 13 (SDO)   |
+| PB5       | CN9 pin 5     | MOSI          | J1 pin 11 (SDI)   |
+| PB6       | CN5 pin 3     | CS            | J1 pin 17 (nSCS)  |
+
+### STM32 ↔ DRV8353RS-EVM (Control/Fault)
+
+| STM32 Pin | Nucleo Header | Function | DRV8353RS-EVM Pin |
+|-----------|---------------|----------|-------------------|
+| PB8       | CN10 pin 3    | ENABLE   | J1 pin 10         |
+| PC6       | CN10 pin 4    | nFAULT   | J1 pin 16         |
+
+ENABLE must be driven high before any PWM output. nFAULT is open-drain active low —
+pullup already on EVM. Configure PC6 as input with EXTI on falling edge →
+`drive_request_fault()`.
+
+### STM32 ↔ DRV8353RS-EVM (Current Sense)
+
+| STM32 Pin | Nucleo Header | ADC1 Channel | DRV8353RS-EVM Pin | Phase |
+|-----------|---------------|--------------|-------------------|-------|
+| PA4       | CN8 pin 5     | CH4          | J1 pin 15 (ISENA) | A     |
+| PC1       | CN8 pin 6     | CH11         | J1 pin 13 (ISENB) | B     |
+| PC4       | TBD           | CH14         | J1 pin 11 (ISENC) | C     |
+
+ADC1 triggered by TIM1 center-aligned PWM peak for noise-free sampling.
+
+### AKM11E Encoder ↔ MAX3096 ↔ STM32
+
+The AKM11E outputs RS-422 differential encoder signals. The MAX3096CPE+ is a 3.3V
+quad differential line receiver that converts to single-ended 3.3V logic for the STM32.
+
+**MAX3096 hookup:**
 
 ```
-Pi → SPI2 → ring buffer (4096 samples)
-                  │
-             1kHz SysTick
-             position loop (P)
-                  │ vel_cmd
-             5kHz TIM1 ÷4
-             velocity loop (PI)
-                  │ iq_cmd
-             20kHz TIM1
-             current loop (PI)
-                  │ v_q_cmd
-             pwm_apply_vq()
-             inverse Park + Clarke
-                  │
-             TIM1 CH1/2/3 complementary PWM
-             DRV8353RS-EVM → AKM11E
+Encoder A+  → MAX3096 pin 2  (A1)
+Encoder A-  → MAX3096 pin 1  (B1)
+MAX3096 pin 3 (Y1) → PA0 (CN8 pin 1) — TIM5 CH1
+
+Encoder B+  → MAX3096 pin 6  (A2)
+Encoder B-  → MAX3096 pin 7  (B2)
+MAX3096 pin 5 (Y2) → PA1 (CN8 pin 2) — TIM5 CH2
 ```
 
-Dead time inserted automatically by DRV8353RS TDRIVE (VGS monitoring) — not configured in TIM1.
+**MAX3096 power and enable:**
 
----
-
-## Simulation Results
-
-Software plant model validated before hardware bring-up. See [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md) for derivation.
-
-**Position and velocity tracking — trapezoidal profile:**
-![Position and velocity tracking](docs/plots/sim_results.png)
-
-**Closed-loop frequency response — chirp sweep 0.1→250Hz:**
-![Bode plot](docs/plots/bode.png)
-
-Bandwidth ~0.3Hz with P-only position loop and no feedforward — expected for a lightly damped simulation plant with low inertia (`J = 1.7×10⁻⁶ kg·m²`, motor shaft only, no load). Bandwidth will increase significantly on hardware with real motor inertia, tuned gains, and velocity feedforward.
-
-See [docs/PLANT_MODEL.md](docs/PLANT_MODEL.md) for full plant derivation and transfer function.
-
----
-
-## Build
-
-```bash
-cmake -S . -B build \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j
-st-flash --reset write build/fw.bin 0x08000000
+```
+Pin 16 VCC  → 3.3V
+Pin 8  GND  → GND
+Pin 4  G    → 3.3V   (enable high)
+Pin 12 /G   → GND    (enable low)
 ```
 
-> **Note:** Build from terminal only. VS Code CMake Tools UI overrides the cross-compile toolchain.
+Outputs enabled when G=high AND /G=low.
+
+**Passive components:**
+
+```
+120Ω termination resistor across A1/B1 (pins 1-2) at MAX3096 input
+120Ω termination resistor across A2/B2 (pins 6-7) at MAX3096 input
+0.1µF ceramic cap — VCC to GND, close to pin 16
+10µF cap          — VCC to GND, bulk bypass
+```
+
+### GND Common
+
+| Device | Connection     |
+|--------|----------------|
+| Pi 5   | Pin 9          |
+| EVM    | J1 pin 3 (GND) |
+| PS−    | J5 GND         |
 
 ---
 
-## Status
+## Execution Flow
 
-| Component | State |
-|---|---|
-| SPI2 slave DMA circular | ✅ proven — 5007 packets, 0 errors |
-| Ring buffer + READY refill | ✅ proven |
-| TIM1 20kHz ISR | ✅ running |
-| Drive state machine | ✅ IDLE → ENABLED → IDLE |
-| Plant model simulation | ✅ loops closed, gain tuning in progress |
-| TIM1 3-phase complementary PWM | ✅ verified on scope at 20kHz |
-| FOC inverse Park + Clarke | ✅ implemented in pwm_apply_vq() |
-| ADC current sensing | 🔲 not yet wired |
-| Encoder hardware bring-up | 🔲 cable needed |
-| Open loop motor spin | 🔲 pending hardware wiring |
-| Closed loop FOC | 🔲 pending hardware bring-up |
+### Startup — `main()` runs once
+
+```
+main()
+  ├─ clock_init()                 — HSI → PLL → 100MHz
+  ├─ plant_init()                 — zero sim plant state
+  ├─ pi_init / p_init             — zero controller integrators
+  ├─ spi_init()                   — configure SPI2 + DMA
+  ├─ encoder_init()               — configure TIM5 quadrature decoder
+  ├─ pwm_init()                   — configure TIM1 20kHz center-aligned PWM + GPIO
+  ├─ SysTick_Config(...)          — configure 1kHz SysTick
+  └─ while(1) {}                  — main sleeps forever
+```
 
 ---
 
-## Project Goal
+### Phase 1 — Pi sends first SPI block → DMA ISR fires
 
-Demonstrate full-stack servo drive competency — trajectory generation, SPI comms, bare metal STM32, and closed-loop FOC from scratch. Target applications: semiconductor capital equipment (KLA, ASML, Aerotech, Lam Research).
+```
+DMA ISR
+  ├─ ring_push(samples)           — fill ring buffer with trajectory samples
+  └─ drive_request_servo_on()     — set servo_on_req = 1 (flag only)
+```
+
+---
+
+### Phase 2 — Next 1ms tick → SysTick fires
+
+```
+SysTick_Handler (1 kHz)
+  ├─ drive_update()
+  │    ├─ STATE_IDLE → STATE_SERVO_ON  (servo_on_req)
+  │    │    └─ on entry: loops_reset(), plant_init(), pwm_enable()
+  │    ├─ STATE_IDLE → STATE_OPEN_LOOP (open_loop_req)
+  │    │    └─ on entry: ol_theta=0, pwm_enable()
+  │    └─ STATE_SERVO_ON, ring empty → STATE_IDLE, pwm_disable()
+  │
+  └─ STATE_SERVO_ON:
+       ├─ ring_pop(&s)
+       ├─ update telemetry
+       ├─ pos_err = s.pos_cmd - plant.pos_counts
+       └─ vel_cmd = p_step()
+```
+
+---
+
+### Phase 3 — Every 50µs → TIM1 ISR fires (20 kHz)
+
+```
+TIM1_UP_TIM10_IRQHandler (20 kHz)
+  ├─ every 2nd tick (10 kHz):
+  │    iq_cmd = pi_step(&velocity_loop, vel_cmd - plant.vel)
+  ├─ every tick (20 kHz):
+  │    v_q_cmd = pi_step(&current_loop, iq_cmd - plant.i_q)
+  └─ plant_step(v_q_cmd)          — sim; replaced by pwm_apply_vq() on HW
+```
+
+---
+
+## Nested Time Scales
+
+```
+1ms  ┤ SysTick ── position loop ── consumes 1 trajectory sample
+     ├─ 100µs ── velocity loop (every 2nd TIM1 tick, 10kHz)
+     └─ 50µs ─── current loop + PWM update (every TIM1 tick, 20kHz)
+```
+
+---
+
+## Interrupt Priorities
+
+| IRQ                  | Priority | Rate   | Role                          |
+|----------------------|----------|--------|-------------------------------|
+| TIM1_UP_TIM10_IRQn   | 1        | 20 kHz | Current + velocity loops, PWM |
+| DMA1_Stream3_IRQn    | 2        | per pkt| SPI RX decode, ring fill      |
+| SysTick              | 15       | 1 kHz  | Position loop, state machine  |
+
+---
+
+## State Machine — `drive.c`
+
+```
+         open_loop_req                    servo_on_req
+         (SPI2_OP_OPEN_LOOP)              (SPI2_OP_BLOCK_HDR)
+              │                                │
+    ┌─────────▼──────────┐                     │
+    │      STATE_IDLE     │◄────────────────────┼──────────────┐
+    └──┬──────────────────┘                     │              │
+       │                            ┌───────────▼──────────┐   │
+       │                            │    STATE_SERVO_ON     │───┘
+    ┌──▼──────────────────┐         │  (closed-loop FOC)   │ ring empty
+    │   STATE_OPEN_LOOP   │         └───────────────────────┘ pwm_disable()
+    │  (no feedback)      │
+    └──┬──────────────────┘
+       │ stop_req / pwm_disable()
+       ▼
+    ┌─────────────────────┐
+    │    STATE_FAULT       │  ← fault_req from any state
+    │  (latched, PWM off)  │
+    └─────────────────────┘
+```
+
+---
+
+## PWM — `pwm.c`
+
+- `pwm_init()` — TIM1 + GPIO, MOE=0
+- `pwm_enable()` — set MOE
+- `pwm_disable()` — clear MOE
+- `pwm_apply_vq(v_q, v_d, theta)` — inverse Park + Clarke → CCR1/2/3
+- V_BUS = 24V
+
+---
+
+## SPI Protocol
+
+- **Packet size:** 32 bytes, full duplex
+- **CS:** Pi GPIO7 (pin 26), manual, toggles per packet
+- **STM mode:** SPI2 slave, Mode 0, 8-bit, SSM=1
+
+### Opcodes
+
+| Opcode     | Value | Description                       |
+|------------|-------|-----------------------------------|
+| NOP        | 0x00  | No-op                             |
+| BLOCK_HDR  | 0x03  | Start trajectory → STATE_SERVO_ON |
+| DATA       | 0x04  | Trajectory sample packet          |
+| READY_ACK  | 0x05  | Pi acknowledges READY signal      |
+| TELEM_REQ  | 0x06  | Pi requests telemetry frame       |
+| OPEN_LOOP  | 0x07  | Start open-loop → STATE_OPEN_LOOP |
+| STOP       | 0x08  | Stop → STATE_IDLE                 |
+
+---
+
+## File Map
+
+| File           | Owns                                              |
+|----------------|---------------------------------------------------|
+| `main.c`       | Startup, ISR handlers                             |
+| `clock.c`      | HSI → PLL clock config                            |
+| `pwm.c`        | TIM1 PWM, enable/disable, pwm_apply_vq            |
+| `drive.c`      | State machine, request flags                      |
+| `loops.c`      | Controller state, loops_reset()                   |
+| `control.c`    | pi_step, p_step, pi_init, p_init, open_loop_step  |
+| `plant.c`      | Sim plant (replaced by HW)                        |
+| `spi.c`        | SPI2 + DMA, ring fill, telemetry TX               |
+| `ringBuffer.c` | Ring buffer push/pop                              |
+| `encoder.c`    | TIM5 quadrature decoder                           |
+| `protocol.h`   | TrajSample, TelemetryFrame, opcodes, drive states |
+
+---
+
+## Bringup Sequence
+
+1. Rotor lock / alignment (STATE_ALIGN)
+2. Open-loop electrical spin / encoder polarity check (STATE_OPEN_LOOP)
+3. Closed-loop current validation
+4. Closed-loop velocity
+5. Closed-loop position (STATE_SERVO_ON)
+
+---
+
+## Real Hardware Transition (sim → real)
+
+- **Current feedback** — ADC1 reads DRV8353RS shunt amps (PA4/PC1/PC4)
+- **Velocity feedback** — TIM5 encoder count delta/dt via MAX3096 line receiver
+- **Commutation** — `pwm_apply_vq()` replaces `plant_step()` in TIM1 ISR
+- **Alignment** — STATE_ALIGN locks rotor to theta=0 (AKM11E has no Hall sensors)
+- **Fault** — PC6 nFAULT EXTI falling edge → `drive_request_fault()`
+
+<!-- Images pending: MCU/board photos, pinout reference to be added by user -->

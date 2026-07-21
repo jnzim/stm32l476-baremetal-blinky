@@ -199,6 +199,8 @@ void current_feedback_init(void)
                      (ADC_SMP_84_CYCLES << 3) |
                      (ADC_SMP_84_CYCLES << 6));
 
+
+
     ADC1->JSQR =
         (2u  << ADC_JSQR_JL_Pos)   |
         (10u << ADC_JSQR_JSQ2_Pos) |

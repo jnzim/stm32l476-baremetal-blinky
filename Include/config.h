@@ -15,9 +15,10 @@
 #define SYSID_TEST_CHIRP         0
 #define SYSID_TEST_CL_STEP       1
 #define SYSID_TEST_VEL_CHIRP     2
-#define SYSID_STEP_SINE          3
+#define SYSID_STEPED_SINE        3
+#define SYSID_TEST_CL_VEL_STEP   4
 
-#define SYSID_TEST SYSID_TEST_VEL_CHIRP
+#define SYSID_TEST SYSID_TEST_CL_VEL_STEP
 
 // =============================================================================
 // Math
@@ -59,6 +60,7 @@
 #define ADC_ZERO         2048.0f
 #define AMPS_PER_COUNT   (VREF / (ADC_COUNTS * SHUNT_R * SHUNT_GAIN))
 #define ADC_SMP_84_CYCLES  4u
+#define ADC_SMP_15_CYCLES  1u
 
 // =============================================================================
 // Control loop timing
@@ -97,15 +99,7 @@
 // =============================================================================
 // Velocity loop ID Sysid chirp parameters
 // =============================================================================
-// #define VEL_CHIRP_AMPLITUDE  0.10f   // A peak
-// #define VEL_CHIRP_F_START    1.0f    // Hz
-// #define VEL_CHIRP_F_END      100.0f  // Hz
-// #define VEL_CHIRP_DURATION   40.0f   // seconds
 
-// #define VEL_CHIRP_AMPLITUDE  0.1f   // A peak
-// #define VEL_CHIRP_F_START    2.0f    // Hz
-// #define VEL_CHIRP_F_END      30.0f  // Hz
-// #define VEL_CHIRP_DURATION   20.0f   // seconds
 
 #define VEL_CHIRP_F_START    2.0f
 #define VEL_CHIRP_F_END     100.0f

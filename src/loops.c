@@ -16,7 +16,7 @@ PState  position_loop;
 // ── Inter-loop setpoints ──────────────────────────────────────────────────────
 float          vel_cmd_rad_sec  = 0.0f;
 float          iq_cmd           = 0.0f;
-volatile float v_q_cmd          = 0.0f;
+volatile float v_q_cmd          = 0.0f; 
 
 // ── Rate dividers ─────────────────────────────────────────────────────────────
 uint32_t vel_div = 0;
@@ -33,7 +33,13 @@ void loops_reset(void)
 
     pi_init(&current_loop, 3.86, 5561.0f, -10.0f, 10.0f);
     //pi_init(&current_loop, 7.78f, 11153.0f, -12.0f, 12.0f);
-    pi_init(&velocity_loop, 0.01f, 0.2f, -10.0f, 10.0f);
+    pi_init(&velocity_loop, 0.0167f, 1.2958f, -10.0f, 10.0f);
+
+    
+   //pi_init(&velocity_loop, 0.00835f, 0.1, -10.0f, 10.0f);
+
+
+
     p_init(&position_loop, 0.8f);
 
     vel_cmd_rad_sec    = 0.0f;
