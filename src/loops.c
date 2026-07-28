@@ -5,6 +5,12 @@
 #include <math.h>
 #include "config.h"
 
+
+#define VEL_KP              0.00502f   // A / (rad/s)
+#define VEL_KI              0.38875f   // A / rad
+#define VEL_IQ_LIMIT        0.5f
+
+
 // ── Reset after each move ─────────────────────────────────────────────────────
 volatile uint32_t samples_consumed = 0;
 
@@ -33,11 +39,7 @@ void loops_reset(void)
 
     pi_init(&current_loop, 3.86, 5561.0f, -10.0f, 10.0f);
     //pi_init(&current_loop, 7.78f, 11153.0f, -12.0f, 12.0f);
-    pi_init(&velocity_loop, 0.0167f, 1.2958f, -10.0f, 10.0f);
-
-    
-   //pi_init(&velocity_loop, 0.00835f, 0.1, -10.0f, 10.0f);
-
+    pi_init(&velocity_loop, VEL_KP, VEL_KI, -VEL_IQ_LIMIT, VEL_IQ_LIMIT);
 
 
     p_init(&position_loop, 0.8f);

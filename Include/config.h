@@ -17,8 +17,9 @@
 #define SYSID_TEST_VEL_CHIRP     2
 #define SYSID_STEPED_SINE        3
 #define SYSID_TEST_CL_VEL_STEP   4
+#define RIPPLE_DEBUG             5
 
-#define SYSID_TEST SYSID_TEST_CL_VEL_STEP
+#define SYSID_TEST RIPPLE_DEBUG
 
 // =============================================================================
 // Math
