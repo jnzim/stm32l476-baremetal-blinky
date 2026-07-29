@@ -1,5 +1,7 @@
 # Motion Controller Architecture
 
+[![Build Firmware](https://github.com/jnzim/stm32-servo-drive/actions/workflows/build.yml/badge.svg?branch=jz-dev)](https://github.com/jnzim/stm32-servo-drive/actions/workflows/build.yml)
+
 ## Overview
 
 This is a single-axis BLDC servo drive running on an STM32F411RE Nucleo. The Raspberry Pi 5
