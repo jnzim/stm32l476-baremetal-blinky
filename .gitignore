@@ -1,4 +1,3 @@
-cd ~/dev/stm/projects/drive && cat > .gitignore <<'EOF'
 # ===== Build artifacts =====
 build/
 out/
@@ -36,4 +35,3 @@ compile_commands.json
 Thumbs.db
 #=== Manual
 docs/*.pdf
-EOF
