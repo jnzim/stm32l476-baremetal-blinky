@@ -71,7 +71,7 @@ target_link_options(fw.elf PRIVATE
     -specs=nano.specs
     -Wl,--gc-sections
     -Wl,-Map=${CMAKE_BINARY_DIR}/fw.map
-    -L/Applications/ArmGNUToolchain/15.2.rel1/arm-none-eabi/arm-none-eabi/lib/thumb/v7e-m+fp/hard
+    -L${ARM_TOOLCHAIN_ROOT}/arm-none-eabi/lib/thumb/v7e-m+fp/hard
     -Wl,--start-group
         -lc
         -lgcc

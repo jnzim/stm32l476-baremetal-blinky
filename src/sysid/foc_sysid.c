@@ -30,6 +30,7 @@
 typedef enum
 {
     SYSID_STAGE_ALIGN = 0,
+    SYSID_STAGE_ALIGN_PERTURB,
     SYSID_STAGE_RUN,
     SYSID_STAGE_IDLE
 } SysidStage;
@@ -51,11 +52,11 @@ static float sysid_f            = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_AMPLITUDE       0.5f        // A
+#define CL_STEP_AMPLITUDE       0.1f        // A
 #define CL_STEP_VEL_AMPLITUDE   10.0f       // rad/s
-#define CL_STEP_HOLD_TICKS      10000u       // 50 ms at 20 kHz
-#define CL_STEP_SETTLE_TICKS    1000u       // 50 ms at 20 kHz
-#define VEL_CHIRP_SETTLE_TICKS  20000u      // 1 s  at 20 kHz
+#define CL_STEP_HOLD_TICKS      80000u       
+#define CL_STEP_SETTLE_TICKS    1000u     
+#define VEL_CHIRP_SETTLE_TICKS  20000u     
 
 typedef enum
 {
@@ -208,6 +209,7 @@ static void run_chirp(void)
 
 static void run_vel_chirp(void)
 {
+    
     const float theta = foc_theta_from_encoder();
 
     if (vel_chirp_settle_tick < VEL_CHIRP_SETTLE_TICKS)
@@ -228,13 +230,13 @@ static void run_vel_chirp(void)
     current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
     current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
-    sysid_f = VEL_CHIRP_F_START * powf(VEL_CHIRP_F_END / VEL_CHIRP_F_START,
-                                        sysid_t / VEL_CHIRP_DURATION);
+    sysid_f = VEL_CHIRP_F_START * powf(VEL_CHIRP_F_END / VEL_CHIRP_F_START, sysid_t / VEL_CHIRP_DURATION);
 
     chirp_angle_rad += FOC_TWO_PI * sysid_f * SYSID_DT;
     if (chirp_angle_rad >= FOC_TWO_PI)
+    {
         chirp_angle_rad -= FOC_TWO_PI;
-
+    }
     iq_cmd = VEL_CHIRP_AMPLITUDE * cosf(chirp_angle_rad);
 
     foc_vd_applied = 0.0f;
@@ -367,6 +369,7 @@ static void run_vel_stepped_sine(void)
 
 static void run_cl_step(void)
 {
+
     float theta = foc_theta_from_encoder();
 
     if (!current_feedback_sample_valid())
@@ -374,6 +377,7 @@ static void run_cl_step(void)
 
     current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
     current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
+    vel_meas_counts = encoder_get_velocity();  // ADD HERE
 
     switch (cl_step_phase)
     {
@@ -519,9 +523,7 @@ static void run_cl_vel_step(void)
         }
 
         // Velocity PI → iq_cmd [A], clamped to ±0.5A
-        iq_cmd = pi_step(&velocity_loop,
-                         vel_cmd_rad_sec - vel_meas_rad,
-                         DT_VELOCITY);
+        iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
     }
 
     // ── Inner current loop — 20 kHz ──────────────────────────────────────────
@@ -535,6 +537,15 @@ static void run_cl_vel_step(void)
 // =============================================================================
 // foc_sysid_step — called from TIM1_UP_TIM10_IRQHandler at 20 kHz
 // =============================================================================
+#define SYSID_ALIGN_REPEATS   10u
+#define SYSID_ALIGN_TICKS     40000u   /* same hold time you already use */
+#define SYSID_PERTURB_TICKS   500u    /* kick duration between repeats */
+#define SYSID_PERTURB_VQ      0.3f    /* torque-axis kick, not d-axis */
+
+static uint32_t sysid_align_repeat = 0u;
+static uint32_t sysid_perturb_tick = 0u;
+static uint32_t sysid_idle_tick = 0u;
+static int32_t  sysid_align_log[SYSID_ALIGN_REPEATS];   /* <-- set breakpoint, read this array */
 
 void foc_sysid_step(void)
 {
@@ -555,6 +566,10 @@ void foc_sysid_step(void)
         }
         break;
 
+
+
+
+
         case SYSID_STAGE_RUN:
         {
         #if   SYSID_TEST == SYSID_TEST_CHIRP
@@ -567,6 +582,8 @@ void foc_sysid_step(void)
             run_vel_stepped_sine();
         #elif SYSID_TEST == SYSID_TEST_CL_VEL_STEP
             run_cl_vel_step();
+        #elif SYSID_TEST == RIPPLE_DEBUG
+            run_cl_step();
         #endif
         }
         break;
@@ -576,6 +593,15 @@ void foc_sysid_step(void)
             foc_vd_applied = 0.0f;
             foc_vq_applied = 0.0f;
             pwm_apply_dq(0.0f, 0.0f, 0.0f);
+
+            if (++sysid_idle_tick >= 80000)
+            {
+                sysid_align_tick = 0u;
+                sysid_idle_tick = 0;
+
+            }
+
+
         }
         break;
     }
@@ -595,11 +621,30 @@ void foc_sysid_step(void)
     int32_t enc_pos = encoder_get_position();
 
 #if SYSID_TEST == SYSID_TEST_CL_VEL_STEP
-    int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f); /* vel_cmd  mrad/s */
-    int16_t last_slot    = (int16_t)vel_meas_counts;              /* vel_meas counts/s */
+
+    /* Closed-loop velocity step:
+     *   sysid_f slot -> velocity command [mrad/s]
+     *   last slot    -> measured velocity [counts/s]
+     */
+    int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
+    int16_t last_slot    = (int16_t)vel_meas_counts;
+
+#elif SYSID_TEST == RIPPLE_DEBUG
+
+    /* Constant-iq ripple test:
+     *   sysid_f slot -> actual iq command [mA]
+     *   last slot    -> same measured velocity used by velocity controller
+     */
+    #define VEL_TELEM_DIV 8.0f
+    int16_t sysid_f_slot = (int16_t)(iq_cmd * 1000.0f);
+    int16_t last_slot = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
+
+
 #else
-    int16_t sysid_f_slot = (int16_t)(sysid_f);
+
+    int16_t sysid_f_slot = (int16_t)sysid_f;
     int16_t last_slot    = (int16_t)(iq_cmd * 1000.0f);
+
 #endif
 
     spi_sysid_update_latest(
