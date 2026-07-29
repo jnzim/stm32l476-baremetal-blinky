@@ -1,11 +1,11 @@
 name: Build Firmware
 
 # When this workflow runs:
-#  - every push to main
+#  - every push to jz-dev (the default branch)
 #  - every pull request targeting any branch
 on:
   push:
-    branches: [main]
+    branches: [jz-dev]
   pull_request:
 
 jobs:
