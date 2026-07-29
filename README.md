@@ -2,20 +2,36 @@
 
 [![Build Firmware](https://github.com/jnzim/stm32-servo-drive/actions/workflows/build.yml/badge.svg?branch=jz-dev)](https://github.com/jnzim/stm32-servo-drive/actions/workflows/build.yml)
 
+## Status
+
+**Currently in system identification / bring-up, on real hardware — not sim.**
+
+- Cascaded current (20 kHz) and velocity (5 kHz) PI loops are closed and running on the
+  actual STM32F411RE + DRV8353RS-EVM + AKM11E encoder stack — no plant simulation left in
+  the active path.
+- Loop gains were derived from real chirp/step-response system identification (Bode plots,
+  curve-fit plant models — see `docs/PLANT_MODEL.md` and `docs/plots/`), not guessed.
+- Actively debugging a velocity-loop ripple surfaced during step-response testing (see most
+  recent commits).
+- The position/trajectory-streaming loop and the full drive state machine (`drive.c`:
+  IDLE/OPEN_LOOP/ALIGN/SERVO_ON/FAULT) are designed and scaffolded but **not yet wired into
+  the running firmware** — see [State Machines](#state-machines) below. Current firmware
+  runs directly from the system-ID harness (`sysid/foc_sysid.c`) for characterization; the
+  Pi-streamed-trajectory mode (`RUN_MODE_CLOSED_LOOP`) is the next step once the current
+  loops are validated.
+
 ## Overview
 
-This is a single-axis BLDC servo drive running on an STM32F411RE Nucleo. The Raspberry Pi 5
-generates a trajectory and streams it over SPI. The STM32 closes three nested control loops
-in real time and streams telemetry back to the Pi.
+This is a single-axis BLDC servo drive running on an STM32F411RE Nucleo, being brought up
+and characterized against a DRV8353RS-EVM gate driver and AKM11E encoder. The end goal is a
+Raspberry Pi 5 streaming trajectories over SPI while the STM32 closes nested position/
+velocity/current loops in real time — but right now the firmware runs a dedicated
+system-identification harness that drives the motor directly (chirp injection, step
+response) and streams telemetry back to the Pi at 20 kHz for offline analysis.
 
-There is no traditional main loop. After startup, `main()` sleeps forever in `while(1){}`.
-All work happens in three interrupt handlers firing on independent schedules.
-
-The board also doubles as a system-identification rig: in this mode the STM32 generates
-chirp/sysid profiles onboard directly into the loop (rather than following Pi-streamed
-trajectory samples) and streams telemetry back to the Pi at 10kHz instead of 1kHz. Same
-firmware, same three nested loops — just a different source feeding the loop and a
-different telemetry rate, selected by configuration.
+There is no traditional main loop. After startup, `main()` sleeps forever in `while(1)
+{ __WFI(); }`. All work happens in independent interrupt handlers — see
+[Interrupts](#interrupts) below.
 
 ---
 
@@ -110,8 +126,9 @@ All PWM pins AF1 (TIM1). Dead time handled by DRV8353RS TDRIVE VGS monitoring.
 | PC6       | CN10 pin 4    | nFAULT   | J1 pin 16         |
 
 ENABLE must be driven high before any PWM output. nFAULT is open-drain active low —
-pullup already on EVM. Configure PC6 as input with EXTI on falling edge →
-`drive_request_fault()`.
+pullup already on EVM. Currently read as a plain GPIO status bit (`drv8353_fault()`); it is
+not yet wired to an EXTI interrupt, so a fault does not automatically cut PWM in firmware
+today (the DRV8353RS itself still kills its gate outputs in hardware).
 
 ### STM32 ↔ DRV8353RS-EVM (Current Sense)
 
@@ -121,7 +138,8 @@ pullup already on EVM. Configure PC6 as input with EXTI on falling edge →
 | PC1       | CN8 pin 6     | CH11         | J1 pin 13 (ISENB) | B     |
 | PC4       | TBD           | CH14         | J1 pin 11 (ISENC) | C     |
 
-ADC1 triggered by TIM1 center-aligned PWM peak for noise-free sampling.
+ADC1 injected sequence is hardware-triggered off `TIM1_TRGO`, sampling at the center of the
+PWM cycle for noise-free readings — see `current_feedback.c`.
 
 ### AKM11E Encoder ↔ MAX3096 ↔ STM32
 
@@ -176,86 +194,98 @@ Outputs enabled when G=high AND /G=low.
 
 ```
 main()
-  ├─ clock_init()                 — HSI → PLL → 100MHz
-  ├─ plant_init()                 — zero sim plant state
-  ├─ pi_init / p_init             — zero controller integrators
-  ├─ spi_init()                   — configure SPI2 + DMA
-  ├─ encoder_init()               — configure TIM5 quadrature decoder
-  ├─ pwm_init()                   — configure TIM1 20kHz center-aligned PWM + GPIO
-  ├─ SysTick_Config(...)          — configure 1kHz SysTick
-  └─ while(1) {}                  — main sleeps forever
+  ├─ clock_init()                  — HSI → PLL → 100MHz
+  ├─ encoder_init()                — configure TIM5 quadrature decoder
+  ├─ drive_init()                  — zero drive state machine (not currently driven)
+  ├─ spi_init()                    — configure SPI2 + DMA, ping-pong TX telemetry buffer
+  ├─ ring_init()                   — trajectory ring buffer (not currently consumed)
+  ├─ (wait for user button, PC3)
+  ├─ drv8353_init() / configure()  — SPI1 gate driver setup
+  ├─ pwm_init()                    — TIM1 20kHz center-aligned PWM + GPIO, MOE=0
+  ├─ current_feedback_init()       — ADC1 injected sequence, TIM1_TRGO hardware trigger
+  ├─ drv_enable_high()             — assert DRV8353 ENABLE
+  ├─ current_feedback_calibrate()  — software-start ADC offset calibration
+  ├─ pwm_enable()                  — MOE=1, PWM live
+  ├─ SysTick_Config(...)           — configured, but no SysTick_Handler is defined
+  └─ while (1) { __WFI(); }        — main sleeps forever
 ```
+
+### The only ISR driving the control loop — TIM1 at 20 kHz
+
+```
+TIM1_UP_TIM10_IRQHandler (every 50µs)
+  ├─ encoder_update(tick_ms)
+  └─ foc_sysid_step()              — RUN_MODE_SYSID is currently selected in config.h
+       ├─ SYSID_STAGE_ALIGN  — lock rotor to theta=0 (d-axis voltage, no torque)
+       ├─ SYSID_STAGE_RUN    — dispatches to the active test (config.h: SYSID_TEST),
+       │                        e.g. run_cl_step(): closed current loop @ 20kHz,
+       │                        closed velocity loop @ 5kHz (every 4th tick)
+       └─ SYSID_STAGE_IDLE   — outputs zero, waits
+```
+
+Phase currents arrive independently via `ADC_IRQHandler`, which fires on the ADC's own
+`JEOC` (injected end-of-conversion) interrupt — hardware-triggered by `TIM1_TRGO`, not
+polled from the TIM1 ISR. Telemetry to the Pi is likewise independent: the TIM1 ISR writes
+each sample into a ping-pong buffer (`spi_sysid_update_latest()`), and a free-running
+circular TX DMA continuously shifts the latest complete frame out over SPI2 — the Pi always
+reads whatever was most recently written, without a request/response handshake.
 
 ---
 
-### Phase 1 — Pi sends first SPI block → DMA ISR fires
+## Nested Time Scales (currently active)
 
 ```
-DMA ISR
-  ├─ ring_push(samples)           — fill ring buffer with trajectory samples
-  └─ drive_request_servo_on()     — set servo_on_req = 1 (flag only)
+50µs  ── current loop + PWM update, every TIM1 tick (20 kHz)
+200µs ── velocity loop, every 4th TIM1 tick (5 kHz)
 ```
+
+The position loop (1 kHz, trajectory-sample-driven) is designed but not active — see
+[Status](#status).
 
 ---
 
-### Phase 2 — Next 1ms tick → SysTick fires
+## Interrupts
 
-```
-SysTick_Handler (1 kHz)
-  ├─ drive_update()
-  │    ├─ STATE_IDLE → STATE_SERVO_ON  (servo_on_req)
-  │    │    └─ on entry: loops_reset(), plant_init(), pwm_enable()
-  │    ├─ STATE_IDLE → STATE_OPEN_LOOP (open_loop_req)
-  │    │    └─ on entry: ol_theta=0, pwm_enable()
-  │    └─ STATE_SERVO_ON, ring empty → STATE_IDLE, pwm_disable()
-  │
-  └─ STATE_SERVO_ON:
-       ├─ ring_pop(&s)
-       ├─ update telemetry
-       ├─ pos_err = s.pos_cmd - plant.pos_counts
-       └─ vel_cmd = p_step()
-```
+| IRQ                  | Priority | Rate      | Role                                          |
+|----------------------|----------|-----------|------------------------------------------------|
+| `TIM1_UP_TIM10_IRQn` | 1        | 20 kHz    | Encoder update, sysid stage machine, current + velocity loops |
+| `ADC_IRQn`           | 3        | 20 kHz    | Reads phase currents on injected-conversion complete |
+| `DMA1_Stream3_IRQn`  | 2        | per pkt   | SPI2 RX-complete from Pi (currently counts only) |
+| `EXTI15_10_IRQn`     | 0        | per pkt   | SPI2 CS edge — rearms TX DMA for next telemetry frame |
+
+`SysTick` is configured at boot but has no handler defined, so nothing currently runs at
+1 kHz.
 
 ---
 
-### Phase 3 — Every 50µs → TIM1 ISR fires (20 kHz)
+## State Machines
+
+There are two state machines in this codebase — only one of them is actually running.
+
+### Active — sysid stage sequence (`sysid/foc_sysid.c`)
+
+This is what the firmware runs today, driven directly from the TIM1 ISR:
 
 ```
-TIM1_UP_TIM10_IRQHandler (20 kHz)
-  ├─ every 2nd tick (10 kHz):
-  │    iq_cmd = pi_step(&velocity_loop, vel_cmd - plant.vel)
-  ├─ every tick (20 kHz):
-  │    v_q_cmd = pi_step(&current_loop, iq_cmd - plant.i_q)
-  └─ plant_step(v_q_cmd)          — sim; replaced by pwm_apply_vq() on HW
+SYSID_STAGE_ALIGN → SYSID_STAGE_RUN → SYSID_STAGE_IDLE
+     (lock rotor)     (dispatches to the      (outputs zero,
+                        active test, e.g.       waits)
+                        run_cl_step())
 ```
 
----
+The active test is selected at compile time via `SYSID_TEST` in `config.h` — options
+include open-loop chirp, closed-current-loop step, closed-velocity-loop chirp/step, and a
+constant-iq ripple-debug mode (currently selected, for the velocity ripple investigation).
 
-## Nested Time Scales
+### Designed, not yet wired up — `drive.c`
 
-```
-1ms  ┤ SysTick ── position loop ── consumes 1 trajectory sample
-     ├─ 100µs ── velocity loop (every 2nd TIM1 tick, 10kHz)
-     └─ 50µs ─── current loop + PWM update (every TIM1 tick, 20kHz)
-```
-
----
-
-## Interrupt Priorities
-
-| IRQ                  | Priority | Rate   | Role                          |
-|----------------------|----------|--------|-------------------------------|
-| TIM1_UP_TIM10_IRQn   | 1        | 20 kHz | Current + velocity loops, PWM |
-| DMA1_Stream3_IRQn    | 2        | per pkt| SPI RX decode, ring fill      |
-| SysTick              | 15       | 1 kHz  | Position loop, state machine  |
-
----
-
-## State Machine — `drive.c`
+A full drive state machine exists for the eventual Pi-trajectory-streaming mode, but
+`drive_sm_run()` is never called anywhere in the firmware (it was written to run from
+`SysTick`, which has no handler). It's left in place as the target architecture for
+`RUN_MODE_CLOSED_LOOP`:
 
 ```
          open_loop_req                    servo_on_req
-         (SPI2_OP_OPEN_LOOP)              (SPI2_OP_BLOCK_HDR)
               │                                │
     ┌─────────▼──────────┐                     │
     │      STATE_IDLE     │◄────────────────────┼──────────────┐
@@ -274,6 +304,9 @@ TIM1_UP_TIM10_IRQHandler (20 kHz)
     └─────────────────────┘
 ```
 
+(A second, newer prototype FSM, `servo_sm.c`, also exists but isn't part of the build at
+all — it's excluded from `CMakeLists.txt` and doesn't currently compile.)
+
 ---
 
 ## PWM — `pwm.c`
@@ -281,18 +314,25 @@ TIM1_UP_TIM10_IRQHandler (20 kHz)
 - `pwm_init()` — TIM1 + GPIO, MOE=0
 - `pwm_enable()` — set MOE
 - `pwm_disable()` — clear MOE
-- `pwm_apply_vq(v_q, v_d, theta)` — inverse Park + Clarke → CCR1/2/3
-- V_BUS = 24V
+- `pwm_apply_dq(v_d, v_q, theta)` — inverse Park + Clarke → CCR1/2/3
+- V_BUS = 12V
 
 ---
 
-## SPI Protocol
+## SPI Link (current)
 
-- **Packet size:** 32 bytes, full duplex
-- **CS:** Pi GPIO7 (pin 26), manual, toggles per packet
-- **STM mode:** SPI2 slave, Mode 0, 8-bit, SSM=1
+The active telemetry path is a fixed-format, continuous sample stream — not the
+opcode-driven protocol described below (that protocol exists in `protocol.h` but is only
+referenced by the currently-inactive `drive.c`/ring-buffer path).
 
-### Opcodes
+- **Packet size:** 32 bytes, full duplex (`SysIdSample` struct, size-checked at compile time)
+- **CS:** Pi GPIO7 (pin 26), manual, toggles per packet — used to rearm TX DMA, not to gate data
+- **STM mode:** SPI2 slave, `CPHA=1`, RX/TX DMA, no software framing/opcodes
+- Every 20 kHz tick, the TIM1 ISR writes a fresh sample (position, id/iq, vd/vq, theta,
+  phase currents, stage flags) into whichever half of a ping-pong buffer isn't currently
+  being DMA'd out; the Pi always reads the latest complete frame on its next transaction.
+
+### Opcode protocol (designed, not currently consumed by the active SPI path)
 
 | Opcode     | Value | Description                       |
 |------------|-------|-----------------------------------|
@@ -308,38 +348,32 @@ TIM1_UP_TIM10_IRQHandler (20 kHz)
 
 ## File Map
 
-| File           | Owns                                              |
-|----------------|---------------------------------------------------|
-| `main.c`       | Startup, ISR handlers                             |
-| `clock.c`      | HSI → PLL clock config                            |
-| `pwm.c`        | TIM1 PWM, enable/disable, pwm_apply_vq            |
-| `drive.c`      | State machine, request flags                      |
-| `loops.c`      | Controller state, loops_reset()                   |
-| `control.c`    | pi_step, p_step, pi_init, p_init, open_loop_step  |
-| `plant.c`      | Sim plant (replaced by HW)                        |
-| `spi.c`        | SPI2 + DMA, ring fill, telemetry TX               |
-| `ringBuffer.c` | Ring buffer push/pop                              |
-| `encoder.c`    | TIM5 quadrature decoder                           |
-| `protocol.h`   | TrajSample, TelemetryFrame, opcodes, drive states |
+| File                      | Owns                                                          |
+|---------------------------|----------------------------------------------------------------|
+| `main.c`                  | Startup, TIM1 ISR entry point                                 |
+| `clock.c`                 | HSI → PLL → 100MHz                                            |
+| `tim1.c`                  | TIM1 timebase config (center-aligned PWM + update IRQ)        |
+| `pwm.c`                   | GPIO/AF setup, enable/disable, `pwm_apply_dq`                 |
+| `current_feedback.c`      | ADC1 injected sequence, `ADC_IRQHandler`, calibration         |
+| `encoder.c`               | TIM5 quadrature decode, velocity filter                       |
+| `drv8353.c`               | SPI1 gate driver config/status                                |
+| `spi.c`                   | SPI2 + DMA telemetry link to the Pi                           |
+| `sysid/foc_sysid.c`       | **Active** — sysid stage machine, all current test modes      |
+| `sysid/foc_trajectory.c`  | Trajectory-following step (for `RUN_MODE_CLOSED_LOOP`, unused today) |
+| `loops.c` / `control.c`   | PI controller state and step functions shared by both modes  |
+| `drive.c`                 | Designed drive FSM — not currently called (see State Machines) |
+| `servo_sm.c`              | Prototype FSM — not in the build                              |
+| `ringBuffer.c`, `plant.c` | Ring buffer + simulated plant, used by the not-yet-active trajectory path |
+| `protocol.h`              | `TrajSample`, `TelemetryFrame`, opcodes, drive states (design surface for `RUN_MODE_CLOSED_LOOP`) |
 
 ---
 
 ## Bringup Sequence
 
-1. Rotor lock / alignment (STATE_ALIGN)
-2. Open-loop electrical spin / encoder polarity check (STATE_OPEN_LOOP)
-3. Closed-loop current validation
-4. Closed-loop velocity
-5. Closed-loop position (STATE_SERVO_ON)
-
----
-
-## Real Hardware Transition (sim → real)
-
-- **Current feedback** — ADC1 reads DRV8353RS shunt amps (PA4/PC1/PC4)
-- **Velocity feedback** — TIM5 encoder count delta/dt via MAX3096 line receiver
-- **Commutation** — `pwm_apply_vq()` replaces `plant_step()` in TIM1 ISR
-- **Alignment** — STATE_ALIGN locks rotor to theta=0 (AKM11E has no Hall sensors)
-- **Fault** — PC6 nFAULT EXTI falling edge → `drive_request_fault()`
+1. Rotor lock / alignment — **done**
+2. Open-loop electrical spin / encoder polarity check — **done**
+3. Closed-loop current validation — **done**, gains from measured system ID
+4. Closed-loop velocity — **done**, currently debugging a ripple in step response
+5. Closed-loop position (Pi-streamed trajectories) — **not started**
 
 <!-- Images pending: MCU/board photos, pinout reference to be added by user -->
