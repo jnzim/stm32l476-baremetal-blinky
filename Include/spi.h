@@ -26,7 +26,8 @@ void spi_sysid_update_latest(int16_t ia_mA,
                              uint16_t adc_a,
                              uint16_t adc_b,
                              uint16_t adc_c,
-                             uint16_t flags);
+                             uint16_t flags,
+                             uint16_t test_id);
 
 extern volatile     TelemetryFrame telem_buf[2];
 extern volatile     uint8_t        telem_write_idx;

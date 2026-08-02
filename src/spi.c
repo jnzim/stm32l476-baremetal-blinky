@@ -111,7 +111,8 @@ void spi_sysid_update_latest(int16_t ia_mA,
                              uint16_t adc_a,
                              uint16_t adc_b,
                              uint16_t adc_c,
-                             uint16_t flags)
+                             uint16_t flags,
+                             uint16_t test_id)
 {
     uint8_t idx = spi_tx_write_idx ^ 1u;
     SysIdSample *s = &spi_tx_buf[idx];
@@ -130,7 +131,7 @@ void spi_sysid_update_latest(int16_t ia_mA,
     s->adc_c      = adc_c;
     s->flags      = flags;
     s->crc        = 0;
-    s->pad        = 0;
+    s->pad        = test_id;
 
     __DMB();
     spi_tx_write_idx = idx;
@@ -205,7 +206,7 @@ void spi_init(void)
                             600, 700,
                             800,
                             2048, 2050, 2046,
-                            0x1234);
+                            0x1234, 0);
 
     /*
      * RX DMA: Pi MOSI -> SPI2->DR -> spi2_rx_buf

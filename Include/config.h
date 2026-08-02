@@ -12,14 +12,13 @@
 // Sysid test selector
 // =============================================================================
 
-#define SYSID_TEST_CHIRP         0
-#define SYSID_TEST_CL_STEP       1
-#define SYSID_TEST_VEL_CHIRP     2
-#define SYSID_STEPED_SINE        3
-#define SYSID_TEST_CL_VEL_STEP   4
-#define RIPPLE_DEBUG             5
+#define SYSID_TEST_CURRENT_LOOP_CHIRP       0
+#define SYSID_TEST_CURRENT_LOOP_STEP        1
+#define SYSID_TEST_VEL_CHIRP                2
+#define SYSID_TEST_CL_VEL_STEP              4
+#define RIPPLE_DEBUG                        5
 
-#define SYSID_TEST RIPPLE_DEBUG
+#define SYSID_TEST SYSID_TEST_CL_VEL_STEP
 
 // =============================================================================
 // Math
@@ -75,7 +74,7 @@
 // FOC bring-up voltages
 // =============================================================================
 
-#define V_ALIGN  1.5f
+#define V_ALIGN  3.0f
 #define V_RUN    1.0f
 #define ENC_DIR  (+1.0f)
 #define FF_GAIN  0.95f
@@ -91,7 +90,7 @@
 // Current loop ID Sysid chirp parameters
 // =============================================================================
 
-#define SYSID_AMPLITUDE  0.1f
+#define SYSID_AMPLITUDE  1.0f
 #define SYSID_F_START    1.0f
 #define SYSID_F_END      2000.0f
 #define SYSID_DURATION   20.0f

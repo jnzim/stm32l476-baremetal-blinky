@@ -30,7 +30,6 @@
 typedef enum
 {
     SYSID_STAGE_ALIGN = 0,
-    SYSID_STAGE_ALIGN_PERTURB,
     SYSID_STAGE_RUN,
     SYSID_STAGE_IDLE
 } SysidStage;
@@ -52,9 +51,9 @@ static float sysid_f            = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_AMPLITUDE       0.1f        // A
+#define CL_STEP_AMPLITUDE       0.3f        // A
 #define CL_STEP_VEL_AMPLITUDE   10.0f       // rad/s
-#define CL_STEP_HOLD_TICKS      80000u       
+#define CL_STEP_HOLD_TICKS      10000u       
 #define CL_STEP_SETTLE_TICKS    1000u     
 #define VEL_CHIRP_SETTLE_TICKS  20000u     
 
@@ -69,39 +68,6 @@ typedef enum
 
 static ClStepPhase cl_step_phase = CL_STEP_SETTLE;
 static uint32_t    cl_step_tick  = 0;
-
-// =============================================================================
-// Velocity STEP
-// =============================================================================
-
-#define VEL_STEP_AMPLITUDE_A        0.10f
-#define VEL_STEP_NUM_FREQUENCIES    5u
-#define VEL_STEP_CYCLES             20u
-#define VEL_STEP_DISCARD_CYCLES     3u
-#define VEL_STEP_BETWEEN_TIME_S     0.25f
-
-static const float vel_step_frequencies[VEL_STEP_NUM_FREQUENCIES] =
-{
-    1.0f,
-    10.0f,
-    30.0f,
-    40.0f,
-    50.0f
-};
-
-typedef enum
-{
-    VEL_STEP_STATE_SETTLE,
-    VEL_STEP_STATE_RUN,
-    VEL_STEP_STATE_BETWEEN,
-    VEL_STEP_STATE_DONE
-} VelStepState;
-
-static VelStepState vel_step_state        = VEL_STEP_STATE_SETTLE;
-static uint32_t     vel_step_index        = 0u;
-static uint32_t     vel_step_cycle_count  = 0u;
-static float        vel_step_angle_rad    = 0.0f;
-static float        vel_step_between_time = 0.0f;
 
 // =============================================================================
 // Shared measured values (written each ISR, read by spi_sysid_update_latest)
@@ -179,10 +145,10 @@ static void run_current_test(void)
 
 
 // =============================================================================
-// run_chirp — OL Vd chirp, theta=0, proven from sysid bring-up
+// run_chirp — Open current loop chirp. Input is Vd, measure Id for f anaylsis
 // =============================================================================
 
-static void run_chirp(void)
+static void run_current_lp_chirp(void)
 {
     sysid_f = SYSID_F_START * powf(SYSID_F_END / SYSID_F_START, sysid_t / SYSID_DURATION);
 
@@ -259,115 +225,10 @@ static void run_vel_chirp(void)
 
 
 // =============================================================================
-// run_vel_stepped_sine — CL iq stepped sine sweep
+// run_cl_step — Closed current loop step input (set CL_STEP_HIGH )
 // =============================================================================
 
-static void run_vel_stepped_sine(void)
-{
-    const float theta = foc_theta_from_encoder();
-
-    if (!current_feedback_sample_valid()) { return; }
-
-    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
-    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
-
-    switch (vel_step_state)
-    {
-        case VEL_STEP_STATE_SETTLE:
-            iq_cmd  = 0.0f;
-            sysid_f = 0.0f;
-
-            ++vel_chirp_settle_tick;
-
-            if (vel_chirp_settle_tick >= VEL_CHIRP_SETTLE_TICKS)
-            {
-                vel_step_index       = 0u;
-                vel_step_cycle_count = 0u;
-                vel_step_angle_rad   = 0.0f;
-                vel_step_state       = VEL_STEP_STATE_RUN;
-            }
-            break;
-
-        case VEL_STEP_STATE_RUN:
-        {
-            const float frequency_hz = vel_step_frequencies[vel_step_index];
-            sysid_f = frequency_hz;
-
-            iq_cmd = VEL_STEP_AMPLITUDE_A * cosf(vel_step_angle_rad);
-
-            vel_step_angle_rad += FOC_TWO_PI * frequency_hz * SYSID_DT;
-            if (vel_step_angle_rad >= FOC_TWO_PI)
-            {
-                vel_step_angle_rad -= FOC_TWO_PI;
-                ++vel_step_cycle_count;
-            }
-
-            if (vel_step_cycle_count >= VEL_STEP_CYCLES)
-            {
-                iq_cmd  = 0.0f;
-                sysid_f = 0.0f;
-
-                vel_step_angle_rad    = 0.0f;
-                vel_step_cycle_count  = 0u;
-                vel_step_between_time = 0.0f;
-
-                ++vel_step_index;
-
-                vel_step_state = (vel_step_index >= VEL_STEP_NUM_FREQUENCIES)
-                                 ? VEL_STEP_STATE_DONE
-                                 : VEL_STEP_STATE_BETWEEN;
-            }
-            break;
-        }
-
-        case VEL_STEP_STATE_BETWEEN:
-            iq_cmd  = 0.0f;
-            sysid_f = 0.0f;
-
-            vel_step_between_time += SYSID_DT;
-
-            if (vel_step_between_time >= VEL_STEP_BETWEEN_TIME_S)
-            {
-                vel_step_between_time = 0.0f;
-                vel_step_angle_rad    = 0.0f;
-                vel_step_cycle_count  = 0u;
-                vel_step_state        = VEL_STEP_STATE_RUN;
-            }
-            break;
-
-        case VEL_STEP_STATE_DONE:
-        default:
-            iq_cmd         = 0.0f;
-            sysid_f        = 0.0f;
-            foc_vd_applied = 0.0f;
-            foc_vq_applied = 0.0f;
-
-            pwm_apply_dq(0.0f, 0.0f, theta);
-            loops_reset();
-
-            vel_step_state        = VEL_STEP_STATE_SETTLE;
-            vel_step_index        = 0u;
-            vel_step_cycle_count  = 0u;
-            vel_step_angle_rad    = 0.0f;
-            vel_step_between_time = 0.0f;
-            vel_chirp_settle_tick = 0u;
-
-            sysid_stage = SYSID_STAGE_IDLE;
-            return;
-    }
-
-    foc_vd_applied = 0.0f;
-    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
-
-    pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
-}
-
-
-// =============================================================================
-// run_cl_step — CL iq step response
-// =============================================================================
-
-static void run_cl_step(void)
+static void run_cl_current_step(void)
 {
 
     float theta = foc_theta_from_encoder();
@@ -453,7 +314,6 @@ static void run_cl_step(void)
 #define VEL_LOOP_DECIMATE  4u   // 20 kHz / 4 = 5 kHz
 
 static uint32_t vel_loop_tick = 0;
-
 static void run_cl_vel_step(void)
 {
     float theta = foc_theta_from_encoder();
@@ -572,14 +432,12 @@ void foc_sysid_step(void)
 
         case SYSID_STAGE_RUN:
         {
-        #if   SYSID_TEST == SYSID_TEST_CHIRP
-            run_chirp();
-        #elif SYSID_TEST == SYSID_TEST_CL_STEP
-            run_cl_step();
+        #if   SYSID_TEST == SYSID_TEST_CURRENT_LOOP_CHIRP
+            run_current_lp_chirp();
+        #elif SYSID_TEST == SYSID_TEST_CURRENT_LOOP_STEP
+            run_cl_current_step();
         #elif SYSID_TEST == SYSID_TEST_VEL_CHIRP
             run_vel_chirp();
-        #elif SYSID_TEST == SYSID_STEP_SINE
-            run_vel_stepped_sine();
         #elif SYSID_TEST == SYSID_TEST_CL_VEL_STEP
             run_cl_vel_step();
         #elif SYSID_TEST == RIPPLE_DEBUG
@@ -612,7 +470,7 @@ void foc_sysid_step(void)
 
     uint16_t flags = (uint16_t)sysid_stage;
 
-#if SYSID_TEST == SYSID_TEST_CHIRP
+#if SYSID_TEST == SYSID_TEST_CURRENT_LOOP_CHIRP
     float theta_telem = 0.0f;
 #else
     float theta_telem = foc_theta_from_encoder();
@@ -659,7 +517,8 @@ void foc_sysid_step(void)
         (int16_t)(ia_meas * 1000.0f),           /* ia_mA          */
         (int16_t)(ib_meas * 1000.0f),           /* ib_mA          */
         last_slot,                               /* iq_cmd_mA  OR vel_meas counts/s */
-        flags
+        flags,
+        (uint16_t)SYSID_TEST                     /* which test is compiled in, for the Pi's script dispatch */
     );
 }
 
@@ -680,12 +539,6 @@ void foc_sysid_reset(void)
 
     cl_step_phase = CL_STEP_SETTLE;
     cl_step_tick  = 0;
-
-    vel_step_state        = VEL_STEP_STATE_SETTLE;
-    vel_step_index        = 0u;
-    vel_step_cycle_count  = 0u;
-    vel_step_angle_rad    = 0.0f;
-    vel_step_between_time = 0.0f;
 
     iq_cmd          = 0.0f;
     foc_vd_applied  = 0.0f;
