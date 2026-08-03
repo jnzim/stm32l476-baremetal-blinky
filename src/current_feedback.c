@@ -106,9 +106,11 @@ void ADC_IRQHandler(void)
     {
         GPIOC->BSRR = (1u << 4);            /* PC4 high — sample point */
 
-        current_adc_raw[0] = ADC1->JDR1;
-        current_adc_raw[1] = ADC1->JDR2;
-        current_adc_raw[2] = ADC1->JDR3;
+        /* 2 conversions/PWM cycle now (JEXTEN=both edges) — running 2-sample
+         * average here for noise reduction, cheap enough for an ISR. */
+        current_adc_raw[0] = (uint16_t)((current_adc_raw[0] + ADC1->JDR1) / 2u);
+        current_adc_raw[1] = (uint16_t)((current_adc_raw[1] + ADC1->JDR2) / 2u);
+        current_adc_raw[2] = (uint16_t)((current_adc_raw[2] + ADC1->JDR3) / 2u);
 
         ADC1->SR &= ~ADC_SR_JEOC_BIT;
 
@@ -208,18 +210,21 @@ void current_feedback_init(void)
         (12u << ADC_JSQR_JSQ4_Pos);
 
     /*
-     * Hardware trigger: TIM1_TRGO, rising edge.
+     * Hardware trigger: TIM1_TRGO, both edges.
      *
      * Per RM0383 Table 43:
      *   JEXTSEL = 0001 (1) = TIM1_TRGO
-     *   JEXTEN  = 01   (1) = rising edge
+     *   JEXTEN  = 11   (3) = both edges
      *
-     * TIM1 CR2 MMS=111 routes OC4REF as TRGO.
-     * CCR4 controls when OC4REF fires within the PWM cycle.
+     * TIM1 CR2 MMS=111 routes OC4REF as TRGO. In center-aligned PWM, OC4REF
+     * has one rising edge (up-count past CCR4) and one falling edge
+     * (down-count past CCR4) per period, both close to the peak where CCR4
+     * sits — triggering on both gives 2 injected conversions per PWM cycle
+     * instead of 1, averaged together in ADC_IRQHandler for noise reduction.
      */
     ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
     ADC1->CR2 |=  ((1u << ADC_CR2_JEXTSEL_Pos) |
-                   (1u << ADC_CR2_JEXTEN_Pos));
+                   (3u << ADC_CR2_JEXTEN_Pos));
 
     /* Enable JEOC interrupt — ADC_IRQHandler reads results */
     ADC1->CR1 |= ADC_CR1_JEOCIE;
@@ -290,10 +295,11 @@ void current_feedback_calibrate(void)
 
     /*
      * Re-enable hardware trigger and JEOC interrupt after calibration.
+     * Both edges — see current_feedback_init() for why.
      */
     ADC1->CR2 &= ~(ADC_CR2_JEXTSEL | ADC_CR2_JEXTEN);
     ADC1->CR2 |=  ((1u << ADC_CR2_JEXTSEL_Pos) |
-                   (1u << ADC_CR2_JEXTEN_Pos));
+                   (3u << ADC_CR2_JEXTEN_Pos));
 
     ADC1->SR = 0u;
 

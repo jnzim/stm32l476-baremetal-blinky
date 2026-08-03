@@ -453,6 +453,8 @@ bool drv8353_write_read_test(void)
 //   0x03  unlocked, IDRIVE HS 150 mA source / 300 mA sink (EVM-mandated max)
 //   0x04  CBC on, TDRIVE 4000 ns, IDRIVE LS 150/300 mA
 //   0x05  latched OCP for bring-up, 100 ns dead time, VDS at default 0.75 V
+//         (50/100/400 ns all gave the same ripple in the foc-sysid
+//         RIPPLE_DEBUG dead-time sweep — back to the original default)
 //   0x06  bidirectional CSA, GAIN = 40 V/V  <-- i_q scaling referenceƒ
 //
 // Current scaling with this config:

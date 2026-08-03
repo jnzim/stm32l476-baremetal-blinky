@@ -4,21 +4,32 @@
 
 ## Status
 
-**Currently in system identification / bring-up, on real hardware — not sim.**
+**Full cascade closed on real hardware — current, velocity, and position — not sim.**
 
-- Cascaded current (20 kHz) and velocity (5 kHz) PI loops are closed and running on the
-  actual STM32F411RE + DRV8353RS-EVM + AKM11E encoder stack — no plant simulation left in
-  the active path.
-- Loop gains were derived from real chirp/step-response system identification (Bode plots,
-  curve-fit plant models — see `docs/PLANT_MODEL.md` and `docs/plots/`), not guessed.
-- Actively debugging a velocity-loop ripple surfaced during step-response testing (see most
-  recent commits).
-- The position/trajectory-streaming loop and the full drive state machine (`drive.c`:
+- Cascaded current (20 kHz), velocity (5 kHz), and position (1 kHz) loops are all closed
+  and running on the actual STM32F411RE + DRV8353RS-EVM + AKM11E encoder stack.
+- Every gain was derived from measured system identification, not a datasheet guess or a
+  rule of thumb: chirp/step-response Bode plots, curve-fit plant models, and — for the
+  position loop specifically — a phase-margin-*targeted* design built from the closed
+  velocity loop's measured phase lag at the chosen crossover, rather than the usual
+  conservative "cross over a decade below" heuristic.
+- That design was then independently verified by chirping the **entire closed position
+  loop** (`SYSID_TEST_CL_POS_CHIRP`) and reconstructing the open-loop response directly
+  from the measured closed-loop data (`L = H/(1-H)` for unity feedback) — no model
+  assumptions left unchecked. Measured result: **42 Hz closed-loop bandwidth, 68.8° phase
+  margin, 13.5 dB gain margin.**
+- A current-loop cross-coupling bias (`i_d` drifting with speed due to a missing d-axis
+  PI) was root-caused and fixed. A persistent order-6 electrical / order-18 mechanical
+  velocity ripple was characterized (real, not noise; best explanation by elimination is
+  cogging torque) but not independently confirmed — a zero-current coast test to isolate
+  it was tried and abandoned (too much bench friction to coast usefully).
+- The Pi-streamed-trajectory loop and the full drive state machine (`drive.c`:
   IDLE/OPEN_LOOP/ALIGN/SERVO_ON/FAULT) are designed and scaffolded but **not yet wired into
-  the running firmware** — see [State Machines](#state-machines) below. Current firmware
-  runs directly from the system-ID harness (`sysid/foc_sysid.c`) for characterization; the
-  Pi-streamed-trajectory mode (`RUN_MODE_CLOSED_LOOP`) is the next step once the current
-  loops are validated.
+  the running firmware** — see [State Machines](#state-machines) below. All loop-closure
+  work above runs from the system-ID harness (`sysid/foc_sysid.c`), reusing the same
+  cascade `RUN_MODE_CLOSED_LOOP` will eventually run. Next hardware step: connect a real
+  stage (not just the bare motor) and re-run full sysid against that plant before building
+  the trajectory-streaming motion controller (trapezoidal velocity profiles) on top.
 
 ## Overview
 
@@ -273,9 +284,11 @@ SYSID_STAGE_ALIGN → SYSID_STAGE_RUN → SYSID_STAGE_IDLE
                         run_cl_step())
 ```
 
-The active test is selected at compile time via `SYSID_TEST` in `config.h` — options
-include open-loop chirp, closed-current-loop step, closed-velocity-loop chirp/step, and a
-constant-iq ripple-debug mode (currently selected, for the velocity ripple investigation).
+The active test is selected at compile time via `SYSID_TEST` in `config.h` — options span
+open-loop current chirp/step, closed-velocity-loop chirp/step, a constant-iq ripple-debug
+mode, closed-position-loop step and chirp (whole-system, for the 42 Hz BW / 68.8° PM
+result above), and a slow "cine sweep" variant of the position chirp sized for filming
+(visible 3-80 Hz sweep instead of the analysis range) rather than measurement.
 
 ### Designed, not yet wired up — `drive.c`
 
@@ -372,8 +385,16 @@ referenced by the currently-inactive `drive.c`/ring-buffer path).
 
 1. Rotor lock / alignment — **done**
 2. Open-loop electrical spin / encoder polarity check — **done**
-3. Closed-loop current validation — **done**, gains from measured system ID
-4. Closed-loop velocity — **done**, currently debugging a ripple in step response
-5. Closed-loop position (Pi-streamed trajectories) — **not started**
+3. Closed-loop current validation — **done**, gains from measured system ID, d-axis
+   cross-coupling PI added
+4. Closed-loop velocity — **done**, 82.5 Hz measured closed-loop bandwidth; a real
+   order-6 electrical velocity ripple was characterized (likely cogging) but not
+   independently root-caused
+5. Closed-loop position, via the sysid harness — **done**, 42 Hz measured closed-loop
+   bandwidth, 68.8° phase margin, 13.5 dB gain margin — measured directly on the whole
+   closed system, not inferred
+6. Closed-loop position via Pi-streamed trajectories (`RUN_MODE_CLOSED_LOOP`, trapezoidal
+   velocity profiles) — **not started**; next hardware step is connecting a real stage and
+   re-running sysid against that plant before building this
 
 <!-- Images pending: MCU/board photos, pinout reference to be added by user -->

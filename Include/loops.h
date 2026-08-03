@@ -4,6 +4,7 @@
 
 // ── Controller state ──────────────────────────────────────────────────────────
 extern PIState current_loop;
+extern PIState d_current_loop;
 extern PIState velocity_loop;
 extern PState  position_loop;
 
