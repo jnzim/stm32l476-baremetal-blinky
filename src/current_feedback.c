@@ -106,8 +106,8 @@ void ADC_IRQHandler(void)
     {
         GPIOC->BSRR = (1u << 4);            /* PC4 high — sample point */
 
-        /* 2 conversions/PWM cycle now (JEXTEN=both edges) — running 2-sample
-         * average here for noise reduction, cheap enough for an ISR. */
+        /* Recursive IIR blend, not a fresh 2-sample average -- fires 2x/period
+         * now (JEXTEN=both edges). Noise floor: ~75-80mA -> ~39-42mA RMS. */
         current_adc_raw[0] = (uint16_t)((current_adc_raw[0] + ADC1->JDR1) / 2u);
         current_adc_raw[1] = (uint16_t)((current_adc_raw[1] + ADC1->JDR2) / 2u);
         current_adc_raw[2] = (uint16_t)((current_adc_raw[2] + ADC1->JDR3) / 2u);

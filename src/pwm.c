@@ -165,8 +165,9 @@ void pwm_init(void)
     TIM1->CCR3 = PWM_CENTER;
 
     // -------------------------------------------------------------------------
-    // ADC trigger: fires at count = PWM_ARR - PWM_SAMPLE_OFFSET on downstroke.
-    // Low-side FETs conducting since last CCR crossing; CSA settled at this point.
+    // ADC trigger: CCR4 crosses twice per period (up/down counting), giving 2
+    // injected conversions symmetric around the peak, blended in
+    // ADC_IRQHandler (current_feedback.c).
     // -------------------------------------------------------------------------
 
     TIM1->CCR4 = PWM_ARR - PWM_SAMPLE_OFFSET;
