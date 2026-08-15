@@ -370,6 +370,7 @@ void current_feedback_get_phase_amps(float *ia, float *ib, float *ic)
     float b = ((float)current_adc_raw[1] - adc_offset[1]) * AMPS_PER_COUNT;
     float c = ((float)current_adc_raw[2] - adc_offset[2]) * AMPS_PER_COUNT;
 
+
     if (ia != 0) { *ia = a; }
     if (ib != 0) { *ib = b; }
     if (ic != 0) { *ic = c; }

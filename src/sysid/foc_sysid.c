@@ -11,6 +11,7 @@
 //                             sysid_f_Hz slot  → vel_cmd  [mrad/s]  Python: val/1000.0
 //                             iq_cmd_mA slot   → vel_meas [counts/s] Python: val*(2pi/8192)
 
+#include "stm32f4xx.h"
 #include "foc_sysid.h"
 #include "config.h"
 #include "encoder.h"
@@ -21,6 +22,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 
 // =============================================================================
@@ -36,6 +38,7 @@ typedef enum
 
 static SysidStage   sysid_stage             = SYSID_STAGE_ALIGN;
 static uint32_t     sysid_align_tick        = 0;
+static uint32_t     sysid_discharge_tick    = 0;
 static int32_t      sysid_enc_offset        = 0;
 static uint32_t     vel_chirp_settle_tick   = 0;
 
@@ -51,11 +54,28 @@ static float sysid_f            = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_AMPLITUDE       0.3f        // A
+#define CL_STEP_AMPLITUDE       0.28f        // A
 #define CL_STEP_VEL_AMPLITUDE   10.0       // rad/s
-#define CL_STEP_HOLD_TICKS      10000u       
+#define CL_STEP_HOLD_TICKS      5000u       
 #define CL_STEP_SETTLE_TICKS    1000u     
-#define VEL_CHIRP_SETTLE_TICKS  20000u     
+
+// Was 20000 (4.0s @ the 5kHz decimated vel-loop rate) for no real reason --
+// loops_reset() already zeroes every PI state at the ALIGN->RUN transition,
+// and real current is already at genuine zero by then too (see the align
+// discharge phase). The only actual constraint is encoder_get_velocity()'s
+// 80-sample moving-average filter (VEL_FILTER_N in encoder.c) needing to
+// fill before vel_meas_counts is trustworthy -- 80 samples @ 20kHz = 4ms =
+// 20 ticks @ the 5kHz decimated rate this counter runs at. Any more than
+// that just gives a persistent current bias more time to wind up the
+// d-axis integrator before the real test signal starts, for no benefit.
+//
+// Named CL_-specific and kept separate from VEL_CHIRP_SETTLE_TICKS
+// (config.h) on purpose -- run_cl_vel_chirp()'s settle counter runs at this
+// 5kHz-decimated rate, but run_vel_chirp()'s (the open-loop test) runs on
+// the raw undecimated 20kHz tick. Sharing one constant between them
+// silently broke the open-loop test's settle time (4ms instead of ~1s)
+// when this one got tuned down for the closed-loop context.
+#define CL_VEL_CHIRP_SETTLE_TICKS  20u
 
 typedef enum
 {
@@ -145,7 +165,7 @@ static void run_current_test(void)
 
 
 // =============================================================================
-// run_chirp — Open current loop chirp. Input is Vd, measure Id for f anaylsis
+// run_chirp — Open current loop chirp. Input is Vq, measure Iq for f analysis
 // =============================================================================
 
 static void run_current_lp_chirp(void)
@@ -156,8 +176,8 @@ static void run_current_lp_chirp(void)
     if (chirp_angle_rad >= FOC_TWO_PI)
         chirp_angle_rad -= FOC_TWO_PI;
 
-    foc_vd_applied = SYSID_AMPLITUDE * sinf(chirp_angle_rad);
-    foc_vq_applied = 0.0f;
+    foc_vq_applied = SYSID_AMPLITUDE * sinf(chirp_angle_rad);
+    foc_vd_applied = 0.0f;
 
     pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
 
@@ -165,7 +185,9 @@ static void run_current_lp_chirp(void)
 
     sysid_t += SYSID_DT;
     if (sysid_t >= SYSID_DURATION)
+    {
         sysid_stage = SYSID_STAGE_IDLE;
+    }
 }
 
 
@@ -178,12 +200,35 @@ static void run_vel_chirp(void)
     
     const float theta = foc_theta_from_encoder();
 
+    if (!current_feedback_sample_valid()) { return; }
+
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
+
     if (vel_chirp_settle_tick < VEL_CHIRP_SETTLE_TICKS)
     {
-        iq_cmd = 0.0f;
+        if (vel_chirp_settle_tick == 0u)
+        {
+            // P-only current loop for this test -- Ki=5561's integrator
+            // winding up then unwinding is exactly what produced the
+            // ringing (instant spike, then ~15-tick decaying oscillation)
+            // seen after a real stick-slip disturbance. Same Kp as
+            // everywhere else (loops.c), Ki=0 so the measured response
+            // reflects the raw electrical/mechanical plant directly instead
+            // of the controller's own dynamics on top of it. Scoped to just
+            // this test -- current_loop/d_current_loop are shared globals,
+            // loops_reset() puts the real Ki back at the next ALIGN->RUN.
+            pi_init(&current_loop,   3.86f, 0.0f, -(V_BUS / 2.0f), (V_BUS / 2.0f));
+            pi_init(&d_current_loop, 3.86f, 0.0f, -(V_BUS / 2.0f), (V_BUS / 2.0f));
+        }
+
+        // Settle onto the bias current itself, not zero -- so the stage is
+        // already moving at the bias's steady-state kinetic speed before the
+        // chirp starts, instead of stepping onto the bias at t=0 of the sweep.
+        float i_cmd = 0;
 
         foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
-        foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
+        foc_vq_applied = pi_step(&current_loop, i_cmd - i_q_meas, SYSID_DT);
 
         pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
 
@@ -191,10 +236,6 @@ static void run_vel_chirp(void)
         return;
     }
 
-    if (!current_feedback_sample_valid()) { return; }
-
-    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
-    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
     sysid_f = VEL_CHIRP_F_START * powf(VEL_CHIRP_F_END / VEL_CHIRP_F_START, sysid_t / VEL_CHIRP_DURATION);
 
@@ -204,6 +245,8 @@ static void run_vel_chirp(void)
         chirp_angle_rad -= FOC_TWO_PI;
     }
     iq_cmd = VEL_CHIRP_AMPLITUDE * cosf(chirp_angle_rad);
+    if (iq_cmd >  VEL_CHIRP_IQ_LIMIT) iq_cmd =  VEL_CHIRP_IQ_LIMIT;
+    if (iq_cmd < -VEL_CHIRP_IQ_LIMIT) iq_cmd = -VEL_CHIRP_IQ_LIMIT;
 
     foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
     foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
@@ -394,7 +437,7 @@ static void run_cl_vel_step(void)
 }
 
 
-// =============================================================================
+// ============================================= ================================
 // run_cl_vel_chirp — CLOSED velocity loop chirp: sweeps vel_cmd (not iq)
 // with the velocity PI closed around it, to identify the closed-loop
 // vel_cmd -> vel_meas response for designing the outer position P
@@ -425,7 +468,7 @@ static void run_cl_vel_chirp(void)
 
         float vel_meas_rad = vel_meas_counts * (FOC_TWO_PI / ENCODER_CPR);
 
-        if (vel_chirp_settle_tick < VEL_CHIRP_SETTLE_TICKS)
+        if (vel_chirp_settle_tick < CL_VEL_CHIRP_SETTLE_TICKS)
         {
             vel_cmd_rad_sec = 0.0f;
             ++vel_chirp_settle_tick;
@@ -440,7 +483,11 @@ static void run_cl_vel_chirp(void)
             if (cl_vel_chirp_angle_rad >= FOC_TWO_PI)
                 cl_vel_chirp_angle_rad -= FOC_TWO_PI;
 
-            vel_cmd_rad_sec = CL_VEL_CHIRP_AMPLITUDE * cosf(cl_vel_chirp_angle_rad);
+            // sinf, not cosf -- starts at 0 so this is continuous with the
+            // settle phase's vel_cmd_rad_sec=0.0f hold. cosf(0)=1 would step
+            // the full CL_VEL_CHIRP_AMPLITUDE instantly the moment settle
+            // ends, with current already closed-loop and reacting live.
+            vel_cmd_rad_sec = CL_VEL_CHIRP_AMPLITUDE * sinf(cl_vel_chirp_angle_rad);
 
             cl_vel_chirp_t += DT_VELOCITY;
 
@@ -715,7 +762,7 @@ static void run_cine_sweep(void)
 
         if (cine_settle_tick < POSITION_STEP_SETTLE_TICKS)
         {
-            pos_cmd_rad = 0.0f;
+            pos_cmd_rad = pos_meas_rad;
             ++cine_settle_tick;
         }
         else
@@ -786,15 +833,31 @@ void foc_sysid_step(void)
     {
         case SYSID_STAGE_ALIGN:
         {
-            foc_vd_applied = V_ALIGN;
-            foc_vq_applied = 0.0f;
-            pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
-
-            if (++sysid_align_tick >= 20000)
+            if (sysid_align_tick < 20000u)
             {
-                sysid_enc_offset = encoder_get_position();
-                loops_reset();
-                sysid_stage      = SYSID_STAGE_RUN;
+                foc_vd_applied = V_ALIGN;
+                foc_vq_applied = 0.0f;
+                pwm_apply_dq(foc_vd_applied, foc_vq_applied, 0.0f);
+                ++sysid_align_tick;
+            }
+            else
+            {
+                // Motor off -- let the real current that built up during the
+                // align hold decay to actual zero through the winding's own
+                // R/L before ever closing a loop around it, instead of
+                // patching around a large real current the fresh controller
+                // has never seen. tau = L/R ~= 1.25mH/1.59ohm ~= 0.79ms;
+                // 2000 ticks (100ms) is well over 100 time constants.
+                foc_vd_applied = 0.0f;
+                foc_vq_applied = 0.0f;
+                pwm_apply_dq(0.0f, 0.0f, 0.0f);
+
+                if (++sysid_discharge_tick >= 2000u)
+                {
+                    sysid_enc_offset = encoder_get_position();
+                    loops_reset();
+                    sysid_stage      = SYSID_STAGE_RUN;
+                }
             }
         }
         break;
@@ -805,6 +868,35 @@ void foc_sysid_step(void)
 
         case SYSID_STAGE_RUN:
         {
+            /* ADC stall watchdog -- current_feedback_sample_count() only
+             * advances when ADC_IRQHandler actually services a JEOC event.
+             * Telemetry showed this freezing for seconds at a time during
+             * CL_VEL_CHIRP instability while the rest of this ISR (theta,
+             * encoder, current loop) kept running fine. Trap right at the
+             * point it goes stale so a live debugger halts with the fault
+             * still present, instead of the freeze being over by the time
+             * a human can react to it. Only meaningful with a debugger
+             * attached -- an unhandled BKPT with no debugger will hard-fault.
+             */
+            #define ADC_STALL_WATCH_TICKS  100u   /* ~5ms @ 20kHz -- well past healthy ADC cadence */
+            static uint32_t adc_stall_prev_count = 0xFFFFFFFFu;
+            static uint32_t adc_stall_tick       = 0u;
+
+            uint32_t adc_count_now = current_feedback_sample_count();
+            if (adc_count_now == adc_stall_prev_count)
+            {
+                if (++adc_stall_tick >= ADC_STALL_WATCH_TICKS)
+                {
+                    //__BKPT(0);            /* <-- ADC_IRQn has stalled; halt here */
+                    adc_stall_tick = 0u;  /* in case execution is resumed manually */
+                }
+            }
+            else
+            {
+                adc_stall_tick = 0u;
+            }
+            adc_stall_prev_count = adc_count_now;
+
         #if   SYSID_TEST == SYSID_TEST_CURRENT_LOOP_CHIRP
             run_current_lp_chirp();
         #elif SYSID_TEST == SYSID_TEST_CURRENT_LOOP_STEP
@@ -859,11 +951,24 @@ void foc_sysid_step(void)
 
     int32_t enc_pos = encoder_get_position();
 
-#if SYSID_TEST == SYSID_TEST_CL_VEL_STEP || SYSID_TEST == SYSID_TEST_CL_VEL_CHIRP
+#if SYSID_TEST == SYSID_TEST_CL_VEL_STEP
 
-    /* Closed-loop velocity step/chirp:
+    /* Closed-loop velocity step:
      *   sysid_f slot -> velocity command [mrad/s]
      *   last slot    -> measured velocity [counts/s]
+     */
+    int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
+    int16_t last_slot    = (int16_t)vel_meas_counts;
+
+#elif SYSID_TEST == SYSID_TEST_CL_VEL_CHIRP
+
+    /* Closed-loop velocity chirp:
+     *   sysid_f slot -> velocity command [mrad/s]
+     *   last slot    -> measured velocity [counts/s]
+     *
+     * sysid_f briefly carried raw ADC1->SR instead, while root-causing the
+     * SPI DMA freeze (see spi.c EXTI15_10_IRQHandler) -- that's fixed now,
+     * back to vel_cmd for real Bode/plant-ID captures.
      */
     int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
     int16_t last_slot    = (int16_t)vel_meas_counts;
@@ -887,12 +992,52 @@ void foc_sysid_step(void)
     int16_t sysid_f_slot = (int16_t)(pos_cmd_rad * 1000.0f);
     int16_t last_slot    = (int16_t)(pos_meas_rad * 1000.0f);
 
+#elif SYSID_TEST == SYSID_TEST_CURRENT_LOOP_STEP
+
+    /* Current-loop step: sysid_f slot is otherwise unused by this test
+     * (only the chirp tests touch it) -- repurposed to carry ic_mA so
+     * all three phase currents (ia, ib, ic) are visible over time,
+     * verifying ia+ib+ic ~= 0 continuously instead of at one instant. */
+    int16_t sysid_f_slot = (int16_t)(ic_meas * 1000.0f);
+    int16_t last_slot    = (int16_t)(iq_cmd * 1000.0f);
+
+#elif SYSID_TEST == SYSID_TEST_VEL_CHIRP
+
+    /* Open-loop velocity/mechanical-plant chirp:
+     *   sysid_f slot -> chirp frequency [Hz]
+     *   last slot    -> commanded current [mA]
+     *
+     * last slot briefly carried the ADC sample counter instead (diagnostic
+     * for a stall theory that turned out not to apply here -- the P-only
+     * current loop + tighter VEL_CHIRP_IQ_LIMIT fixed the real instability).
+     * Reverted -- bode_vel_plot.py reads this column as iq_cmd_mA and uses
+     * it as the coherence reference signal against theta; a monotonic
+     * counter there has ~zero coherence with anything once detrended,
+     * which silently broke the whole plant-ID fit (0 bins >= 0.5 coherence)
+     * until this was caught.
+     */
+    int16_t sysid_f_slot = (int16_t)sysid_f;
+    int16_t last_slot    = (int16_t)(iq_cmd * 1000.0f);
+
 #else
 
     int16_t sysid_f_slot = (int16_t)sysid_f;
     int16_t last_slot    = (int16_t)(iq_cmd * 1000.0f);
 
 #endif
+
+    /* ALIGN-stage override, independent of SYSID_TEST -- carries RCC->CSR's
+     * reset-cause flags (top byte: PORRSTF/BORRSTF/PINRSTF/SFTRSTF/
+     * IWDGRSTF/WWDGRSTF/LPWRRSTF) so a brownout/reset during a violent
+     * instability event shows up in the CSV directly, without needing the
+     * debugger's register view (unreliable this session). g_reset_cause is
+     * captured once at boot in main() and never cleared, so it accumulates
+     * every reset cause since the last real power-cycle. */
+    if (sysid_stage == SYSID_STAGE_ALIGN)
+    {
+        extern volatile uint32_t g_reset_cause;
+        sysid_f_slot = (int16_t)((g_reset_cause >> 16) & 0xFFFFu);
+    }
 
     /* enc_hi/enc_lo normally carry the raw 32-bit encoder position. For the
      * position-loop tests that's fully redundant with pos_meas_rad above (same
@@ -903,6 +1048,19 @@ void foc_sysid_step(void)
 #if SYSID_TEST == SYSID_TEST_POSITION_STEP || SYSID_TEST == SYSID_TEST_CL_POS_CHIRP || SYSID_TEST == SYSID_TEST_CINE_SWEEP
     int16_t enc_hi_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);   /* vel_cmd  [mrad/s]   */
     int16_t enc_lo_slot = (int16_t)vel_meas_counts;                /* vel_meas [counts/s] */
+#elif SYSID_TEST == SYSID_TEST_CL_VEL_CHIRP
+    /* enc_hi repurposed to carry the velocity controller's own output
+     * (iq_cmd, what it's actually asking the current loop for) -- not
+     * previously visible in telemetry at all for this test, only the
+     * current loop's resulting id/iq and vd/vq were. enc_lo repurposed to
+     * carry the ADC injected-conversion sample counter (low 16 bits) --
+     * ia/ib were seen to freeze bit-identical for ~13 consecutive ticks
+     * during an instability event while theta (a different peripheral) kept
+     * updating normally, suggesting ADC_IRQHandler stalls. This counter only
+     * advances when that ISR actually fires, so a flat run of samples here
+     * directly proves/disproves the stall instead of inferring it. */
+    int16_t enc_hi_slot = (int16_t)(iq_cmd * 1000.0f);             /* iq_cmd   [mA]       */
+    int16_t enc_lo_slot = (int16_t)(current_feedback_sample_count() & 0xFFFFu); /* ADC IRQ counter */
 #else
     int16_t enc_hi_slot = (int16_t)(enc_pos >> 16);
     int16_t enc_lo_slot = (int16_t)(enc_pos & 0xFFFF);
@@ -910,7 +1068,7 @@ void foc_sysid_step(void)
 
     spi_sysid_update_latest(
         enc_hi_slot,                             /* enc_hi  OR vel_cmd mrad/s      */
-        enc_lo_slot,                              /* enc_lo  OR vel_meas counts/s   */
+        enc_lo_slot,                             /* enc_lo  OR vel_meas counts/s   */
         sysid_f_slot,                           /* sysid_f_Hz  OR vel_cmd mrad/s  */
         (int16_t)(i_d_meas * 1000.0f),          /* id_mA          */
         (int16_t)(i_q_meas * 1000.0f),          /* iq_mA          */
@@ -933,7 +1091,8 @@ void foc_sysid_step(void)
 void foc_sysid_reset(void)
 {
     sysid_stage      = SYSID_STAGE_ALIGN;
-    sysid_align_tick = 0;
+    sysid_align_tick     = 0;
+    sysid_discharge_tick = 0;
     sysid_enc_offset = 0;
 
     sysid_t         = 0.0f;
@@ -953,7 +1112,7 @@ void foc_sysid_reset(void)
     ia_meas  = ib_meas = ic_meas = 0.0f;
     i_d_meas = i_q_meas = 0.0f;
 
-    vel_chirp_settle_tick = 0u;
+    vel_chirp_settle_tick   = 0u;
 
     pos_chirp_settle_tick  = 0u;
     cl_pos_chirp_t         = 0.0f;

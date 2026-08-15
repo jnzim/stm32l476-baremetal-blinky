@@ -22,7 +22,28 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_CINE_SWEEP
+#define SYSID_TEST SYSID_TEST_VEL_CHIRP
+
+// =============================================================================
+// SPI telemetry
+// =============================================================================
+//
+// CL_VEL_CHIRP instability events used to end with the whole system frozen.
+// Root cause: EXTI15_10_IRQHandler (CS rising edge, NVIC priority 0 --
+// highest in the system) was passively waiting for DMA1_Stream4's TX
+// enable bit to self-clear, which only happens if the host's SPI
+// transaction completed all 32 bytes on its own. A short/glitched host
+// transaction leaves the stream permanently mid-transfer with no more
+// clock edges ever coming, so it never self-clears -- confirmed live via
+// debugger (stall_guard counting all the way down). At priority 0, burning
+// the full ~6-8ms bound there blocks the main control loop, ADC, and
+// everything else for the duration -- that's what was actually causing the
+// "instability" all session; disabling SPI entirely (3 clean passes, no
+// freeze) proved it wasn't the velocity loop. Fixed properly in
+// EXTI15_10_IRQHandler (spi.c) -- it now force-disables the stream instead
+// of waiting on natural completion, so re-enabling telemetry here.
+#define SPI_TELEM_ENABLED  1
+
 
 
 // =============================================================================
@@ -52,7 +73,7 @@
 // Bus voltage
 // =============================================================================
 
-#define V_BUS   12.0f
+#define V_BUS   12.0f    // matches the PS setting -- 24V caused severe SPI corruption earlier, never re-validated after the actual DMA root cause fix
 
 // =============================================================================
 // Current sensing
@@ -106,15 +127,51 @@
 // =============================================================================
 
 
-#define VEL_CHIRP_F_START    2.0f
+#define VEL_CHIRP_F_START    0.5f
 #define VEL_CHIRP_F_END     100.0f
 #define VEL_CHIRP_DURATION  100.0f
-#define VEL_CHIRP_AMPLITUDE  0.1f
+#define VEL_CHIRP_AMPLITUDE  0.1f    // resting value -- amplitude sweep (0.3/0.5/0.7A) showed strong
+                                     // friction-driven nonlinearity, not resolved tonight; tomorrow's
+                                     // friction characterization test replaces this approach
+
+// iq_cmd here is open-loop and unclamped by construction -- nothing bounds
+// it like VEL_IQ_LIMIT bounds the closed velocity loop's PI output. At
+// AMPLITUDE=0.3A this ran away once real motion (real back-EMF) appeared,
+// current railed at the ADC's representable limit for ~3.5s, sagged the
+// bench PS hard enough (shared return/ground) to brown-out reset the MCU
+// -- confirmed via RCC->CSR (BORRSTF/PORRSTF). Safety ceiling, not a normal
+// operating limit -- should never actually bind at the intended amplitude.
+//
+// Tightened from 1.0A -- the clamp only bounds the *commanded* iq_cmd, not
+// how hard the current loop's PI can react to a real disturbance. A real
+// stick-slip breakaway snap (confirmed via ADC counter staying healthy
+// through the event -- not a stale-sensor artifact) still let measured
+// current ring out to ~10.5A despite iq_cmd never exceeding 1.0A. Tighter
+// clamp limits how much corrective authority the loop has to ring with.
+#define VEL_CHIRP_IQ_LIMIT  1.0f    // A -- 0.3A was reactive (well below the ~10.5A ring-out), not
+                                    // hardware-derived. Motor rated 2.9A continuous; still well under
+                                    // that with real margin for AMPLITUDE=0.2A to sit unclamped.
+
+// Was a DC-biased chirp (kept the stage moving one direction to avoid
+// stick-slip breakaway every half cycle) with a soft travel-limit reversal
+// -- both removed. The travel-limit reversal introduced real discontinuities
+// into the chirp response that corrupted the linear-system-ID fit; bias
+// went with it since the reversal logic was its only consumer.
+
+// Settle-onto-zero before the chirp starts -- with the bias removed, this
+// only needs to cover current decaying to zero (tau ~= 0.79ms electrical),
+// not letting the stage reach a steady-state kinetic speed anymore. 20
+// ticks @ this test's raw 20kHz rate = 1ms, comfortably past tau. Kept as
+// its own constant (not reused from CL_VEL_CHIRP_SETTLE_TICKS below) since
+// that one runs at the 5kHz-decimated velocity-loop rate -- same tick count
+// would mean a different real time on each.
+#define VEL_CHIRP_SETTLE_TICKS  20u
 
 // =============================================================================
 // Closed velocity loop chirp — sweeps vel_cmd (not iq) with the vel PI
 // closed, to identify the CLOSED-loop vel_cmd -> vel_meas response for
 // designing the outer position P controller.
+
 // =============================================================================
 
 #define CL_VEL_CHIRP_F_START     0.5f
@@ -126,17 +183,12 @@
 // Position loop — pure P, phase-margin-targeted design from the closed-
 // velocity-loop chirp (see closed_vel_bode_plot.py): crossover picked where
 // H(s)'s measured phase lag = 30 deg -> PM_pos = 60 deg, Kp sized from the
-// ACTUAL measured gain there, not assumed unity. Crossover = 24.3 Hz,
-// measured PM = 60.0 deg, GM = 7.2 dB.
-//
-// Superseded the original decade-below-BW heuristic (Kp=51.81, crossover
-// ~7-8 Hz, PM never measured) after the whole-system closed-position-loop
-// chirp (SYSID_TEST_CL_POS_CHIRP) confirmed that heuristic's predicted BW
-// to within ~15% of the measured 7.01 Hz -- enough confidence in the H(s)/s
-// model to trust its faster, margin-verified alternative too.
+// ACTUAL measured gain there, not assumed unity. Re-fit after the wiring fix
+// and VEL_KP/KI re-tune: crossover = 23.64 Hz, measured PM = 60.0 deg,
+// GM = 7.3 dB. Verify against SYSID_TEST_CL_POS_CHIRP before trusting it.
 // =============================================================================
 
-#define POSITION_LOOP_KP        157.7f   // (rad/s) per rad of position error
+#define POSITION_LOOP_KP        150.6f   // (rad/s) per rad of position error
 #define POSITION_VEL_LIMIT      20.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================

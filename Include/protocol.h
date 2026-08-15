@@ -114,7 +114,8 @@ _Static_assert(sizeof(TelemetryFrame) == 32, "TelemetryFrame must be exactly 32 
 _Static_assert(sizeof(TrajSlot) == 32, "TrajSlot must be exactly 32 bytes");
 #endif
 
-#define TRAJ_CRC_LEN  offsetof(TrajSlot, crc16)
+#define TRAJ_CRC_LEN   offsetof(TrajSlot, crc16)
+#define SYSID_CRC_LEN  offsetof(SysIdSample, crc)
 
 /* =============================================================================
  * CRC-16-CCITT utilities

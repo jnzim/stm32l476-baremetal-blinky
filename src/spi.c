@@ -25,6 +25,7 @@ volatile uint32_t cnt_telem     = 0;
 volatile uint32_t cnt_block_hdr = 0;
 volatile uint32_t cnt_cs        = 0;
 volatile uint32_t cnt_tx_rearm  = 0;
+volatile uint32_t cnt_dma_stall = 0;
 
 volatile uint8_t ready_asserted = 0;
 
@@ -130,7 +131,12 @@ void spi_sysid_update_latest(int16_t ia_mA,
     s->adc_b      = adc_b;
     s->adc_c      = adc_c;
     s->flags      = flags;
-    s->crc        = 0;
+    /* Real CRC now -- this was hardcoded to 0 (no integrity checking at
+     * all). A single corrupted frame's flags byte was aliasing into a
+     * valid-looking SYSID_STAGE_IDLE (low 2 bits happened to read 0b10),
+     * making the Pi capture tool think the sweep finished ~23s into a 60s
+     * run. Same crc16_calc/CCITT already used for TrajSlot. */
+    s->crc        = crc16_calc((const uint8_t *)s, SYSID_CRC_LEN);
     s->pad        = test_id;
 
     __DMB();
@@ -316,8 +322,33 @@ void EXTI15_10_IRQHandler(void)
     EXTI->PR = (1u << PIN_RPI_NSS);
     cnt_cs++;
 
-    /* Rearm TX DMA on CS rising edge (end of transaction) */
-    while (DMA1_Stream4->CR & DMA_SxCR_EN) {}
+    /* Rearm TX DMA on CS rising edge (end of transaction).
+     *
+     * Root cause of the multi-ms freezes: this used to passively wait for
+     * EN to self-clear, which only happens once the stream naturally
+     * finishes all NDTR bytes. If the host's SPI transaction ever comes up
+     * short (dropped/glitched clock edges -- plausible given how much
+     * current-transient noise is on this board), the stream is left
+     * permanently mid-transfer with no more clock edges ever coming, so
+     * self-clear never happens -- confirmed live via debugger, stall_guard
+     * counting all the way down on a real stall. At NVIC priority 0
+     * (highest in the system), spinning the full bound there blocks
+     * EVERYTHING, including the main control loop, for ~6-8ms every time.
+     *
+     * Fix: force the stream off immediately instead of waiting for it to
+     * finish on its own -- EN=0 aborts the DMA regardless of transfer
+     * progress. The wait below is now only for the hardware's few-cycle
+     * disable acknowledgment (RM0383), not for transfer completion, so it
+     * should never need anywhere near the old bound again. Keeping a
+     * generous bound and the stall counter anyway, purely as a canary.
+     */
+    DMA1_Stream4->CR &= ~DMA_SxCR_EN;
+    uint32_t stall_guard = 1000u;
+    while ((DMA1_Stream4->CR & DMA_SxCR_EN) && --stall_guard) {}
+    if (stall_guard == 0u)
+    {
+        cnt_dma_stall++;
+    }
 
     DMA1->HIFCR = DMA_HIFCR_CTCIF4 | DMA_HIFCR_CHTIF4 |
                   DMA_HIFCR_CTEIF4  | DMA_HIFCR_CDMEIF4 | DMA_HIFCR_CFEIF4;
