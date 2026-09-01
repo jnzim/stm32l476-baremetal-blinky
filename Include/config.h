@@ -22,7 +22,7 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_CL_VEL_CHIRP
+#define SYSID_TEST SYSID_TEST_POSITION_STEP
 
 
 
@@ -163,9 +163,13 @@
 // loop's own dynamics start corrupting the "pure" plant measurement instead
 // of injecting a clean iq). That ceiling was ~165Hz when this was set at
 // the old 500Hz current-loop target; now that the current loop is
-// re-tuned to ~1000Hz (measured gc=1002.6Hz), it's ~330Hz. Also lets the
-// sweep capture the full shape of the 65-90Hz resonance instead of cutting
-// off while it's still rising.
+// re-tuned to ~1000Hz (measured gc=1002.6Hz), it's ~330Hz. Also what
+// falsified the 65-90Hz "resonance" theory from the closed velocity loop
+// chirp: extended to 300Hz, this open-loop plant sweep showed a clean
+// single-pole rolloff with no bump at all through that band -- the real
+// cause turned out to be encoder_update()'s velocity filter group delay
+// (encoder.c, VEL_FILTER_N), not a mechanical mode. See the position loop
+// section below for the full story.
 #define VEL_CHIRP_F_END     300.0f
 #define VEL_CHIRP_DURATION  100.0f
 // Bumped 0.1f -> 0.3f: stage now attached (was bare motor when 0.1f/0.3f/0.5f/
@@ -224,30 +228,39 @@
 #define CL_VEL_CHIRP_AMPLITUDE  10.0f    // rad/s
 
 // =============================================================================
-// Position loop — pure P. Deliberately NOT the phase-margin-targeted design
-// off the closed-velocity-loop chirp anymore (that landed gc in the 41-43Hz
-// range across every amplitude tested, right against a real mechanical
-// resonance measured at 65-90Hz with only 3.2-3.7dB GM).
+// Position loop — pure P, back to the phase-margin-targeted design off the
+// closed-velocity-loop chirp (crossover picked from measured phase, Kp
+// sized from the ACTUAL measured gain there, not assumed unity).
 //
-// That resonance shows a dip-then-peak shape in H(s) = vel_meas/vel_cmd
-// (anti-resonance ~15-30Hz, resonance ~65-90Hz) -- the classic signature of
-// a two-inertia system (motor + load through the screw/coupling's
-// compliance), consistent with this being a ball-screw stage. But its
-// frequency and Q both moved with VEL_CHIRP_AMPLITUDE (0.35/0.5/0.75/0.9A,
-// non-monotonically -- 0.5A was an outlier dip, not a trend), which a fixed
-// linear mode wouldn't do. Likely backlash in the coupling modulating
-// effective stiffness with load, not resolved yet.
+// The previous note here blamed a 65-90Hz peak on a two-inertia mechanical
+// resonance (motor/load coupling compliance) and backed this gain off to
+// gc~15Hz to stay clear of it. That theory is dropped: extending the
+// open-loop plant sweep to 300Hz (VEL_CHIRP_F_END) showed a clean,
+// monotonic single-pole rolloff with good coherence right through that
+// band -- no bump at all. A real mechanical mode is a property of P(s)
+// itself and would have to show up in a direct P(s) measurement; it
+// didn't. The actual cause was encoder_update()'s velocity filter group
+// delay (encoder.c, VEL_FILTER_N 80->20) -- fixing that took the closed
+// velocity loop's measured phase crossover from 82.7Hz to 165.4Hz and gain
+// margin from 3.7dB to 8.8dB, with no physical change needed.
 //
-// Until that's characterized/fixed mechanically, parked well below it
-// instead: gc ~ 15Hz (Kp_pos/gc ratio ~14:1 was consistent across all four
-// amplitude runs -- 200 = ~14 * 15). No notch -- a fixed notch on a
-// resonance that's already been observed to move is a bad bet; add one
-// later only once the coupling is checked and the resonance (if still
-// present) holds still. Velocity feedforward is the planned way to buy
-// back tracking performance without raising this gain.
+// Designed against that fixed velocity loop at Kp_pos=954.5 (from
+// closed_vel_bode_plot.py's phase-margin-targeted auto-design: predicted
+// gc=71.92Hz, PM=60deg, GM=8.8dB) -- then verified against the actual
+// whole closed system (SYSID_TEST_CL_POS_CHIRP), same as always. Measured
+// result came in well under the prediction: gc=32.17Hz, PM=60.7deg,
+// pc=88.48Hz, GM=16.6dB, 32.6Hz closed-loop BW. The predicted-vs-measured
+// gap is expected, not a red flag -- that auto-design treats L(s) =
+// Kp_pos*H_vel(s)/s as an idealized continuous construction, while the
+// real position loop runs discretized at 1kHz (DT_POSITION) with real
+// quantization on top; the whole-system chirp captures all of that, the
+// velocity-loop-only model can't. PM landed almost exactly on the 60deg
+// target despite gc moving, and GM is excellent -- still a real, verified
+// ~52% BW improvement over the previous conservative fallback (200 ->
+// 21.5Hz measured), just not the naive predicted number.
 // =============================================================================
 
-#define POSITION_LOOP_KP        200.0f   // (rad/s) per rad of position error -- gc ~ 15Hz, clear of the 65-90Hz resonance
+#define POSITION_LOOP_KP        954.5f   // (rad/s) per rad of position error -- measured: gc=32.17Hz, PM=60.7deg, GM=16.6dB, BW=32.6Hz
 #define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
