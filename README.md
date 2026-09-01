@@ -4,32 +4,60 @@
 
 ## Status
 
-**Full cascade closed on real hardware — current, velocity, and position — not sim.**
+**Full cascade closed on real hardware — current, velocity, and position — not sim. Stage
+is now attached (no longer bare-motor).**
 
 - Cascaded current (20 kHz), velocity (5 kHz), and position (1 kHz) loops are all closed
-  and running on the actual STM32F411RE + DRV8353RS-EVM + AKM11E encoder stack.
-- Every gain was derived from measured system identification, not a datasheet guess or a
-  rule of thumb: chirp/step-response Bode plots, curve-fit plant models, and — for the
-  position loop specifically — a phase-margin-*targeted* design built from the closed
-  velocity loop's measured phase lag at the chosen crossover, rather than the usual
-  conservative "cross over a decade below" heuristic.
-- That design was then independently verified by chirping the **entire closed position
-  loop** (`SYSID_TEST_CL_POS_CHIRP`) and reconstructing the open-loop response directly
-  from the measured closed-loop data (`L = H/(1-H)` for unity feedback) — no model
-  assumptions left unchecked. Measured result: **42 Hz closed-loop bandwidth, 68.8° phase
-  margin, 13.5 dB gain margin.**
+  and running on the actual STM32F411RE + DRV8353RS-EVM + AKM11E encoder stack, now driving
+  a real stage rather than the bare motor.
+- Every gain is derived from measured system identification, not a datasheet guess or a
+  rule of thumb: chirp/step-response Bode plots and curve-fit plant models, re-run whenever
+  the plant changes (e.g. the stage being attached).
+- **Current loop:** re-identified against a fresh chirp (R=1.65Ω, L=1.41mH line-to-line),
+  BW target bumped from 500Hz to 1000Hz — the 500Hz design had real margin to spare
+  (PM=85-88°, heavily overdamped). `CURRENT_LOOP_KP/KI = 4.43 / 5184`.
+- **Velocity loop:** re-identified with the stage attached — the plant changed substantially
+  from the bare-motor fit (K=1623.5 rad/s/A, τ=123.67ms now, vs. a much lighter/faster bare
+  motor before). `VEL_KP/KI = 0.0239 / 0.1935`, zero-cancellation design, 50Hz target.
+- **Position loop:** a phase-margin-targeted design (crossover picked from the closed
+  velocity loop's measured phase, not assumed) kept landing its crossover around 41-43Hz —
+  right against a **real mechanical resonance measured at 65-90Hz** in the closed velocity
+  loop's frequency response (dip-then-peak shape in `vel_meas/vel_cmd`, the classic
+  signature of a two-inertia system — motor and load coupled through the screw's
+  compliance). An amplitude sweep (0.35/0.5/0.75/0.9A) showed that resonance's frequency and
+  damping both move non-monotonically with excitation amplitude, which a fixed linear mode
+  wouldn't do — most likely backlash in the coupling modulating effective stiffness under
+  load, not yet confirmed or fixed mechanically. Rather than chase a precise design against
+  a moving target (or add a notch filter tuned to a resonance that's already been observed
+  to shift), the position loop was deliberately backed off to `POSITION_LOOP_KP=200`
+  (crossover ~15-20Hz, clear of the resonance band). Verified against the entire closed
+  position loop (`SYSID_TEST_CL_POS_CHIRP`), reconstructing the open-loop response directly
+  from measured closed-loop data (`L = H/(1-H)`): **21.5 Hz closed-loop bandwidth, 82.8°
+  phase margin, 18.6 dB gain margin**, with the open-loop reconstruction rolling off
+  smoothly straight through the 65-90Hz resonance band — no bump at all at this crossover.
+  Velocity feedforward (not yet implemented) is the planned way to recover tracking
+  performance without spending this margin back.
 - A current-loop cross-coupling bias (`i_d` drifting with speed due to a missing d-axis
   PI) was root-caused and fixed. A persistent order-6 electrical / order-18 mechanical
   velocity ripple was characterized (real, not noise; best explanation by elimination is
   cogging torque) but not independently confirmed — a zero-current coast test to isolate
-  it was tried and abandoned (too much bench friction to coast usefully).
+  it was tried and abandoned (too much bench friction to coast usefully). The mechanical
+  resonance above is a separate, later finding — not yet connected to the ripple
+  investigation, though both point at unmodeled mechanical/friction behavior worth
+  revisiting together.
+- SPI telemetry to the Pi was redesigned to remove an entire class of ISR-priority bug: the
+  TX DMA is now free-running CIRC over a single live buffer that the control loop writes
+  unconditionally every tick — no CS-triggered rearm, no dependency on any ISR's latency or
+  priority. This is what lets the control loop sit at **unconditional highest NVIC
+  priority** with nothing else ever needing to preempt it. See [SPI Link](#spi-link-current).
 - The Pi-streamed-trajectory loop and the full drive state machine (`drive.c`:
   IDLE/OPEN_LOOP/ALIGN/SERVO_ON/FAULT) are designed and scaffolded but **not yet wired into
   the running firmware** — see [State Machines](#state-machines) below. All loop-closure
   work above runs from the system-ID harness (`sysid/foc_sysid.c`), reusing the same
-  cascade `RUN_MODE_CLOSED_LOOP` will eventually run. Next hardware step: connect a real
-  stage (not just the bare motor) and re-run full sysid against that plant before building
-  the trajectory-streaming motion controller (trapezoidal velocity profiles) on top.
+  cascade `RUN_MODE_CLOSED_LOOP` will eventually run. Next hardware steps: check the stage
+  coupling for backlash (the suspected source of the amplitude-dependent resonance above),
+  add velocity feedforward, then build the trajectory-streaming motion controller
+  (trapezoidal velocity profiles) on top.
 
 ## Overview
 
@@ -208,7 +236,7 @@ main()
   ├─ clock_init()                  — HSI → PLL → 100MHz
   ├─ encoder_init()                — configure TIM5 quadrature decoder
   ├─ drive_init()                  — zero drive state machine (not currently driven)
-  ├─ spi_init()                    — configure SPI2 + DMA, ping-pong TX telemetry buffer
+  ├─ spi_init()                    — configure SPI2 + DMA, free-running CIRC TX telemetry
   ├─ ring_init()                   — trajectory ring buffer (not currently consumed)
   ├─ (wait for user button, PC3)
   ├─ drv8353_init() / configure()  — SPI1 gate driver setup
@@ -237,9 +265,12 @@ TIM1_UP_TIM10_IRQHandler (every 50µs)
 Phase currents arrive independently via `ADC_IRQHandler`, which fires on the ADC's own
 `JEOC` (injected end-of-conversion) interrupt — hardware-triggered by `TIM1_TRGO`, not
 polled from the TIM1 ISR. Telemetry to the Pi is likewise independent: the TIM1 ISR writes
-each sample into a ping-pong buffer (`spi_sysid_update_latest()`), and a free-running
-circular TX DMA continuously shifts the latest complete frame out over SPI2 — the Pi always
-reads whatever was most recently written, without a request/response handshake.
+each sample straight into a single live buffer (`spi_sysid_update_latest()`), unconditionally,
+every tick — no CS check, no double-buffering. A free-running circular TX DMA continuously
+re-shifts whatever is currently in that buffer out over SPI2, entirely in hardware; the Pi
+always reads the latest committed sample with zero dependency on any ISR's latency or
+priority. The tradeoff is a torn/misaligned frame if a write lands mid-transaction — caught
+by a CRC the Pi checks and discards on mismatch, not by any framing/rearm logic in the ISR.
 
 ---
 
@@ -248,10 +279,14 @@ reads whatever was most recently written, without a request/response handshake.
 ```
 50µs  ── current loop + PWM update, every TIM1 tick (20 kHz)
 200µs ── velocity loop, every 4th TIM1 tick (5 kHz)
+1ms   ── position loop, every 20th TIM1 tick (1 kHz) -- only when SYSID_TEST selects a
+          closed-position-loop test (e.g. SYSID_TEST_CL_POS_CHIRP); not part of the
+          unconditional cascade the way current/velocity are
 ```
 
-The position loop (1 kHz, trajectory-sample-driven) is designed but not active — see
-[Status](#status).
+Position-loop closure has been verified (see [Status](#status)), but it only runs inside
+the sysid harness when explicitly selected — the always-on Pi-trajectory-streaming cascade
+(`RUN_MODE_CLOSED_LOOP`) is still not wired up.
 
 ---
 
@@ -259,10 +294,16 @@ The position loop (1 kHz, trajectory-sample-driven) is designed but not active �
 
 | IRQ                  | Priority | Rate      | Role                                          |
 |----------------------|----------|-----------|------------------------------------------------|
-| `TIM1_UP_TIM10_IRQn` | 1        | 20 kHz    | Encoder update, sysid stage machine, current + velocity loops |
-| `ADC_IRQn`           | 3        | 20 kHz    | Reads phase currents on injected-conversion complete |
+| `TIM1_UP_TIM10_IRQn` | 0 (highest, unconditional) | 20 kHz | Encoder update, sysid stage machine, current + velocity loops |
+| `ADC_IRQn`           | 1        | 20 kHz    | Reads phase currents on injected-conversion complete |
 | `DMA1_Stream3_IRQn`  | 2        | per pkt   | SPI2 RX-complete from Pi (currently counts only) |
-| `EXTI15_10_IRQn`     | 0        | per pkt   | SPI2 CS edge — rearms TX DMA for next telemetry frame |
+| `EXTI15_10_IRQn`     | 2        | per pkt   | SPI2 CS edge — stats only (`cnt_cs`); no rearm, nothing time-critical since TX is free-running |
+
+Telemetry priority is no longer load-bearing for correctness the way it once was: the TX
+DMA is free-running (see [SPI Link](#spi-link-current)), so nothing in the SPI path has a
+deadline the control loop could ever be blocked by, or that could itself be starved into a
+stale/corrupt frame. `TIM1_UP_TIM10_IRQn` is the unconditional highest priority in the
+system precisely because nothing else needs to preempt it anymore.
 
 `SysTick` is configured at boot but has no handler defined, so nothing currently runs at
 1 kHz.
@@ -286,7 +327,7 @@ SYSID_STAGE_ALIGN → SYSID_STAGE_RUN → SYSID_STAGE_IDLE
 
 The active test is selected at compile time via `SYSID_TEST` in `config.h` — options span
 open-loop current chirp/step, closed-velocity-loop chirp/step, a constant-iq ripple-debug
-mode, closed-position-loop step and chirp (whole-system, for the 42 Hz BW / 68.8° PM
+mode, closed-position-loop step and chirp (whole-system, for the 21.5 Hz BW / 82.8° PM
 result above), and a slow "cine sweep" variant of the position chirp sized for filming
 (visible 3-80 Hz sweep instead of the analysis range) rather than measurement.
 
@@ -339,11 +380,21 @@ opcode-driven protocol described below (that protocol exists in `protocol.h` but
 referenced by the currently-inactive `drive.c`/ring-buffer path).
 
 - **Packet size:** 32 bytes, full duplex (`SysIdSample` struct, size-checked at compile time)
-- **CS:** Pi GPIO7 (pin 26), manual, toggles per packet — used to rearm TX DMA, not to gate data
+- **CS:** Pi GPIO7 (pin 26), manual, toggles per packet — stats only (`cnt_cs`) on the STM
+  side, doesn't gate or rearm anything
 - **STM mode:** SPI2 slave, `CPHA=1`, RX/TX DMA, no software framing/opcodes
-- Every 20 kHz tick, the TIM1 ISR writes a fresh sample (position, id/iq, vd/vq, theta,
-  phase currents, stage flags) into whichever half of a ping-pong buffer isn't currently
-  being DMA'd out; the Pi always reads the latest complete frame on its next transaction.
+- **TX is free-running CIRC** over a single live buffer: every 20 kHz tick, the TIM1 ISR
+  writes a fresh sample (position, id/iq, vd/vq, theta, phase currents, stage flags) straight
+  into it, unconditionally, and DMA continuously re-transmits whatever's currently there. The
+  Pi always gets the latest committed sample with zero dependency on any ISR's latency or
+  priority — this replaced an earlier design where a CS-edge interrupt had to rearm the TX
+  DMA between transactions, which both caused a multi-ms freeze bug (fixed) and, even after
+  that fix, forced telemetry to run at NVIC priority 0 above the control loop to hit its
+  timing (also since removed).
+- **Tradeoff:** a write landing mid-transaction can hand the Pi a torn/misaligned frame.
+  Caught purely by the `crc` field in `SysIdSample` — same CCITT CRC used for `TrajSlot` — the
+  Pi discards a CRC mismatch and resyncs by trying other byte rotations of what it read,
+  rather than any framing logic on the STM side.
 
 ### Opcode protocol (designed, not currently consumed by the active SPI path)
 
@@ -385,16 +436,21 @@ referenced by the currently-inactive `drive.c`/ring-buffer path).
 
 1. Rotor lock / alignment — **done**
 2. Open-loop electrical spin / encoder polarity check — **done**
-3. Closed-loop current validation — **done**, gains from measured system ID, d-axis
-   cross-coupling PI added
-4. Closed-loop velocity — **done**, 82.5 Hz measured closed-loop bandwidth; a real
+3. Closed-loop current validation — **done**, gains from measured system ID (re-identified
+   again this session, BW target bumped 500→1000Hz), d-axis cross-coupling PI added
+4. Closed-loop velocity — **done**, re-identified with a real stage attached (previous
+   82.5 Hz bare-motor result superseded — the plant changed substantially with load); a real
    order-6 electrical velocity ripple was characterized (likely cogging) but not
-   independently root-caused
-5. Closed-loop position, via the sysid harness — **done**, 42 Hz measured closed-loop
-   bandwidth, 68.8° phase margin, 13.5 dB gain margin — measured directly on the whole
-   closed system, not inferred
+   independently root-caused, and a separate mechanical resonance (65-90Hz, amplitude-
+   dependent, likely coupling backlash) was found via closed-loop chirp — see
+   [Status](#status)
+5. Closed-loop position, via the sysid harness — **done**, deliberately backed off from a
+   phase-margin-targeted design (crossover was landing right against the resonance above) to
+   a conservative `POSITION_LOOP_KP=200`. Measured directly on the whole closed system
+   (`SYSID_TEST_CL_POS_CHIRP`, not inferred): 21.5 Hz closed-loop bandwidth, 82.8° phase
+   margin, 18.6 dB gain margin
 6. Closed-loop position via Pi-streamed trajectories (`RUN_MODE_CLOSED_LOOP`, trapezoidal
-   velocity profiles) — **not started**; next hardware step is connecting a real stage and
-   re-running sysid against that plant before building this
+   velocity profiles) — **not started**; next steps are checking the stage coupling for
+   backlash and adding velocity feedforward before building this
 
 <!-- Images pending: MCU/board photos, pinout reference to be added by user -->
