@@ -24,24 +24,24 @@ static int32_t last_position = 0;
 // ---------------------------------------------------------------------------
 // Velocity filter config
 // ---------------------------------------------------------------------------
-// Cut 80 -> 20, confirmed and locked in. The 65-90Hz "resonance" seen in
-// the CLOSED velocity loop chirp did NOT show up in the open-loop plant
-// measurement (VEL_CHIRP_F_END bumped to 300Hz, clean coherence right
-// through that band, smooth single-pole rolloff, no bump) -- ruling out a
-// real mechanical mode. This filter's group delay ((N-1)/(2*Fs), ~2ms at
-// the old N=80) was the actual cause: cutting to N=20 (1ms window, ~13.7
-// deg of phase lag at 80Hz instead of ~58 deg) took the closed-loop
-// resonance's phase crossover from 82.7Hz to 165.4Hz and gain margin from
-// 3.7dB to 8.8dB, measured (SYSID_TEST_CL_VEL_CHIRP). The backlash/
-// two-inertia theory from the earlier amplitude sweep is dropped, not just
-// amended -- this was a discretization artifact, not mechanical.
+// Was 80, cut to 20 earlier tonight to fix a phase-margin problem in the
+// CLOSED velocity loop chirp (traced to this filter's group delay, not a
+// mechanical resonance -- see git history). That fix is still valid, but
+// N=20 was designed around a since-abandoned aggressive position loop
+// (Kp_pos=954.5, gc~70Hz) that needed the margin. With the position loop
+// back down to Kp_pos=200 (gc~15-20Hz) after SYSID_TEST_POSITION_STEP
+// showed continuous current/vq buzz at rest that persisted through BOTH a
+// current-loop gain revert AND the position-loop gain revert -- pointing
+// at this filter's noise (not either loop's gain) as the actual source --
+// there's now room to trade back some of the unneeded phase margin for a
+// quieter vel_meas.
 //
-// Checked the cost before locking in: vel_meas noise during an actual
-// chirp run at N=20 is ~0.4 rad/s (std, sample-to-sample) against a 10
-// rad/s command -- ~4% relative, present but not dominant. Not pushing
-// shorter than this -- the margin problem is solved with room to spare,
-// so there's no reason to trade more noise for GM that's not needed.
-#define VEL_FILTER_N  20   // 1 ms window
+// N=40 (2ms window, ~28 deg phase lag at 80Hz -- between N=20's ~13.7 and
+// the old N=80's ~58) is the compromise being tried. Re-check against
+// SYSID_TEST_CL_VEL_CHIRP (phase crossover/GM shouldn't collapse back
+// toward the original problem) and SYSID_TEST_POSITION_STEP (does the
+// buzz actually drop) before locking in.
+#define VEL_FILTER_N  40   // 2 ms window
                            // resolution: 1 count/ms = 0.767 rad/s
                            // at 10 rad/s -> approximately 13 counts/ms
 

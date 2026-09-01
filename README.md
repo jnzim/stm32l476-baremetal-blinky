@@ -100,21 +100,21 @@ There is no traditional main loop. After startup, `main()` sleeps forever in `wh
 | PA0       | CN8 pin 1     | Encoder A         | TIM5 CH1         |
 | PA1       | CN8 pin 2     | Encoder B         | TIM5 CH2         |
 | PA4       | CN8 pin 5     | Current sense PhA | ADC1 CH4         |
-| PA5       | CN10 pin 11   | SPI1 SCLK         | SPI1             |
-| PA6       | CN10 pin 13   | SPI1 MISO         | SPI1             |
+| PA5       | CN7 (pin TBD) | SPI1 SCLK         | SPI1             |
+| PA6       | CN7 (pin TBD) | SPI1 MISO         | SPI1             |
 | PA7       | CN5 pin 4     | TIM1 CH1N         | PWM Phase A low  |
 | PA8       | CN9 pin 8     | TIM1 CH1          | PWM Phase A high |
 | PA9       | CN5 pin 1     | TIM1 CH2          | PWM Phase B high |
 | PA10      | CN9 pin 3     | TIM1 CH3          | PWM Phase C high |
 | PB0       | CN8 pin 3     | TIM1 CH2N         | PWM Phase B low  |
 | PB1       | CN10 pin 24   | TIM1 CH3N         | PWM Phase C low  |
-| PB5       | CN9 pin 5     | SPI1 MOSI         | SPI1             |
-| PB6       | CN5 pin 3     | SPI1 CS           | SPI1             |
+| PB5       | CN7 (pin TBD) | SPI1 MOSI         | SPI1             |
+| PB6       | CN7 (pin TBD) | SPI1 CS           | SPI1             |
 | PB8       | CN10 pin 3    | ENABLE            | GPIO output      |
-| PB12      | CN7 pin 2     | SPI2 NSS          | SPI2             |
-| PB13      | CN7 pin 4     | SPI2 SCK          | SPI2             |
-| PB14      | CN7 pin 6     | SPI2 MISO         | SPI2             |
-| PB15      | CN7 pin 8     | SPI2 MOSI         | SPI2             |
+| PB12      | CN10 (pin TBD)| SPI2 NSS          | SPI2             |
+| PB13      | CN10 (pin TBD)| SPI2 SCK          | SPI2             |
+| PB14      | CN10 (pin TBD)| SPI2 MISO         | SPI2             |
+| PB15      | CN10 (pin TBD)| SPI2 MOSI         | SPI2             |
 | PC1       | CN8 pin 6     | Current sense PhB | ADC1 CH11        |
 | PC4       | TBD           | Current sense PhC | ADC1 CH14        |
 | PC6       | CN10 pin 4    | nFAULT            | GPIO input       |
@@ -126,14 +126,18 @@ There is no traditional main loop. After startup, `main()` sleeps forever in `wh
 
 ### Pi 5 ↔ STM32 (SPI2 + READY)
 
-| Pi 5 Pin | Pi 5 Signal  | Wire Color | STM32 Pin | Nucleo Header | STM32 Function     |
-|----------|--------------|------------|-----------|---------------|--------------------|
-| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | CN7 pin 28     | SPI2 MOSI          |
+Corrected 2026-09-01 — SPI2 (this table) is on **CN10**, not CN7 as previously
+documented here; CN7 is actually the DRV8353's SPI1 (see below). Pin numbers
+within CN10 are TBD, pending a check against the board silkscreen.
+
+| Pi 5 Pin | Pi 5 Signal  | Wire Color | STM32 Pin | Nucleo Header  | STM32 Function     |
+|----------|--------------|------------|-----------|----------------|--------------------|
+| Pin 19   | GPIO 10 MOSI | Yellow     | PB15      | CN10 (pin TBD) | SPI2 MOSI          |
 | Pin 9    | GND          | Black      | —         | J1 pin 3 (EVM) | GND common         |
-| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | CN7 pin 26     | SPI2 MISO          |
+| Pin 21   | GPIO 9 MISO  | Orange     | PB14      | CN10 (pin TBD) | SPI2 MISO          |
 | Pin 22   | GPIO 25      | Green      | PC13      | CN7 pin 23     | READY (active low) |
-| Pin 23   | GPIO 11 SCK  | Red        | PB13      | CN7 pin 30     | SPI2 SCK           |
-| Pin 26   | GPIO 7 CE1   | Brown      | PB12      | CN7 pin 2      | SPI2 NSS           |
+| Pin 23   | GPIO 11 SCK  | Red        | PB13      | CN10 (pin TBD) | SPI2 SCK           |
+| Pin 26   | GPIO 7 CE1   | Brown      | PB12      | CN10 (pin TBD) | SPI2 NSS           |
 
 ### STM32 ↔ DRV8353RS-EVM (3-phase PWM)
 
@@ -150,12 +154,16 @@ All PWM pins AF1 (TIM1). Dead time handled by DRV8353RS TDRIVE VGS monitoring.
 
 ### STM32 ↔ DRV8353RS-EVM (SPI1 — gate driver config)
 
+Corrected 2026-09-01 — this bus is on **CN7** (the Morpho connector), not
+CN10/CN9/CN5 as previously documented here. Pin numbers within CN7 are TBD,
+pending a check against the board silkscreen.
+
 | STM32 Pin | Nucleo Header | SPI1 Function | DRV8353RS-EVM Pin |
 |-----------|---------------|---------------|-------------------|
-| PA5       | CN10 pin 11   | SCLK          | J1 pin 14 (SCLK)  |
-| PA6       | CN10 pin 13   | MISO          | J1 pin 13 (SDO)   |
-| PB5       | CN9 pin 5     | MOSI          | J1 pin 11 (SDI)   |
-| PB6       | CN5 pin 3     | CS            | J1 pin 17 (nSCS)  |
+| PA5       | CN7 (pin TBD) | SCLK          | J1 pin 14 (SCLK)  |
+| PA6       | CN7 (pin TBD) | MISO          | J1 pin 13 (SDO)   |
+| PB5       | CN7 (pin TBD) | MOSI          | J1 pin 11 (SDI)   |
+| PB6       | CN7 (pin TBD) | CS            | J1 pin 17 (nSCS)  |
 
 ### STM32 ↔ DRV8353RS-EVM (Control/Fault)
 

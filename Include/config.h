@@ -76,7 +76,44 @@
 // Bus voltage
 // =============================================================================
 
-#define V_BUS   12.0f    // matches the PS setting -- 24V caused severe SPI corruption earlier, never re-validated after the actual DMA root cause fix
+// 12V is the only bus voltage actually validated tonight. 24V was
+// discussed and drafted in this file at one point but the PSU was never
+// actually changed to it -- a "76.7% torn SPI frames" result earlier that
+// got misattributed to 24V was really at 12V, running
+// SYSID_TEST_POSITION_STEP (a big, fast, saturating move). So the real,
+// confirmed picture:
+//
+//  - 12V, big/fast step move, SPI at 4MHz: 76.7% torn frames. Slowing the
+//    Pi's SPI clock to 1MHz (spi_open_configure() speed_hz in foc-sysid's
+//    main.cpp -- a Pi-side runtime arg, no firmware change) dropped that to
+//    12% -- real improvement, not a full fix. Scope on MISO (STM32 output)
+//    vs. SCK (from the Pi) showed MISO riding on visible noise, including a
+//    slow DC-level shift mid-burst while SCK kept clocking normally --
+//    direct evidence of noise coupling onto the line itself (likely PWM/
+//    motor switching related), not a firmware or protocol bug. Wiring is
+//    already the shortest jumpers available, so length/routing isn't a
+//    lever here.
+//  - 16V (the one real voltage change tried): the Pi's capture tool gets no
+//    usable SPI data at all -- gives up before ALIGN even finishes -- while
+//    the STM32 control loop keeps running correctly regardless (motion
+//    confirmed physically). Worse than 12V's partial corruption, which
+//    argues against a simple "more voltage = more noise" relationship.
+//  - 24V: not actually tried. Don't trust any comment/number attributed to
+//    24V from earlier tonight.
+//
+// Net: SPI corruption is real even at the "known good" 12V under heavy
+// switching, and gets worse (not better, not proportionally) at 16V. This
+// is a bench hardware question (scope the SPI2 signal path and whatever
+// feeds its logic levels) -- not something more config changes or clock
+// tweaks alone are going to fully resolve. Staying at 12V, since it's the
+// only setting where the SPI link is usable at all, even if imperfectly.
+//
+// Doesn't touch the current loop's design regardless of value: P(s)=1/(Ls+R)
+// and CURRENT_LOOP_KP/KI depend only on motor R/L, not V_BUS -- this only
+// moves the +-(V_BUS/2) saturation clamp (loops.c pi_init calls) and the PWM
+// normalization range (pwm.c), both already written generically off this
+// constant.
+#define V_BUS   12.0f
 
 // =============================================================================
 // Current sensing
@@ -100,37 +137,39 @@
 #define DT_POSITION  (1.0f /  1000.0f)
 
 // =============================================================================
-// Current loop — zero-cancellation design, 1000Hz BW target
+// Current loop — zero-cancellation design, back to a 500Hz BW target
 //
-// Bumped from a 500Hz target 2026-08-31 -- confirmed via bode_plot.py the
-// 500Hz design was landing at gc=469-499Hz (run to run) with PM=85-88 deg,
-// heavily overdamped, so there was real margin to spare. Still a full
-// decade below the 20kHz control loop's 10kHz Nyquist limit. Tradeoff:
-// doubled Kp/Ki means more control effort per unit current error, so
-// watch for the ~40mA RMS ADC noise floor (current_feedback.c) showing up
-// as buzz/noise in vq_cmd, not just PM on paper.
+// Reverted from the 1000Hz bump (Kp=4.43/Ki=5184) made earlier tonight.
+// That comment predicted the exact tradeoff in advance: "doubled Kp/Ki
+// means more control effort per unit current error, watch for the ~40mA
+// RMS ADC noise floor showing up as buzz." SYSID_TEST_POSITION_STEP at
+// V_BUS=12V/POSITION_VEL_LIMIT=50 then showed continuous vq buzz (~+-2-3V,
+// spiking to the rail) and iq_meas buzz (~+-400-800mA) even at rest, not
+// just at step edges -- real evidence of that predicted cost, on top of
+// (and likely compounding with) the outer loop's own noise from
+// VEL_FILTER_N=20 and POSITION_LOOP_KP=954.5. Reverting the current loop
+// gain is the direct lever for the current-loop's own contribution to
+// that buzz, independent of the outer-loop retuning question.
 //
-// Re-derived from a fresh current-loop chirp (bode_plot.py, foc-sysid):
-// fitted plant R=1.65 ohm, L=1.41mH is line-to-line-equivalent (same
-// convention as that script's R_LL/L_LL nominal) -- halve both to get the
-// true per-phase R=0.825 ohm, L=0.705mH before designing. Zero-cancellation
-// (Ki/Kp = R/L) for a 1000Hz target: Kp = wc*L = 4.43 V/A,
-// Ki = Kp/tau = 5184 V/(A*s). Previous 500Hz-target gains (2.07/2450) were
-// designed the same way against an earlier plant fit (R=1.56-1.67/L=1.32-
-// 1.38mH, halved) -- re-run bode_plot.py after any change here to confirm
-// gc lands near target against the real plant, not just by construction.
-// Same gains used for both current_loop (q-axis) and d_current_loop --
-// Ld ~= Lq for this machine (see loops.c).
+// 500Hz-target gains, designed the same zero-cancellation way against an
+// earlier plant fit (R=1.56-1.67/L=1.32-1.38mH, halved to per-phase):
+// measured landing at gc=469-499Hz (run to run) with PM=85-88 deg,
+// heavily overdamped -- real margin, but with less control effort per
+// unit current error than the 1000Hz design. Re-run bode_plot.py after
+// any change here to confirm gc against the real (now 1.67/1.41mH)
+// plant fit, not just by construction. Same gains used for both
+// current_loop (q-axis) and d_current_loop -- Ld ~= Lq for this machine
+// (see loops.c).
 // =============================================================================
 
-#define CURRENT_LOOP_KP  4.43f      // V/A
-#define CURRENT_LOOP_KI  5184.0f    // V/(A*s)
+#define CURRENT_LOOP_KP  2.07f      // V/A
+#define CURRENT_LOOP_KI  2450.0f    // V/(A*s)
 
 // =============================================================================
 // FOC bring-up voltages
 // =============================================================================
 
-#define V_ALIGN  3.0f
+#define V_ALIGN  1.0f
 #define V_RUN    1.0f
 #define ENC_DIR  (+1.0f)
 #define FF_GAIN  0.95f
@@ -244,23 +283,26 @@
 // velocity loop's measured phase crossover from 82.7Hz to 165.4Hz and gain
 // margin from 3.7dB to 8.8dB, with no physical change needed.
 //
-// Designed against that fixed velocity loop at Kp_pos=954.5 (from
-// closed_vel_bode_plot.py's phase-margin-targeted auto-design: predicted
-// gc=71.92Hz, PM=60deg, GM=8.8dB) -- then verified against the actual
-// whole closed system (SYSID_TEST_CL_POS_CHIRP), same as always. Measured
-// result came in well under the prediction: gc=32.17Hz, PM=60.7deg,
-// pc=88.48Hz, GM=16.6dB, 32.6Hz closed-loop BW. The predicted-vs-measured
-// gap is expected, not a red flag -- that auto-design treats L(s) =
-// Kp_pos*H_vel(s)/s as an idealized continuous construction, while the
-// real position loop runs discretized at 1kHz (DT_POSITION) with real
-// quantization on top; the whole-system chirp captures all of that, the
-// velocity-loop-only model can't. PM landed almost exactly on the 60deg
-// target despite gc moving, and GM is excellent -- still a real, verified
-// ~52% BW improvement over the previous conservative fallback (200 ->
-// 21.5Hz measured), just not the naive predicted number.
+// Was 954.5 (from closed_vel_bode_plot.py's phase-margin-targeted
+// auto-design: predicted gc=71.92Hz/PM=60deg/GM=8.8dB; measured whole-
+// system result was actually better than predicted -- gc=32.17Hz,
+// PM=60.7deg, pc=88.48Hz, GM=16.6dB, 32.6Hz BW, SYSID_TEST_CL_POS_CHIRP).
+// Margins were excellent, but that chirp-based verification only checks
+// small-signal stability, not idle noise -- SYSID_TEST_POSITION_STEP then
+// showed continuous chatter at rest (vq buzzing ~+-2-3V, iq_meas
+// ~+-400-800mA, vel_meas dense noise throughout, not just at step edges).
+// Reverting CURRENT_LOOP_KP/KI to the 500Hz-target gains didn't fix it,
+// which points at this gain: at 954.5, ordinary vel_meas noise (from
+// VEL_FILTER_N=20's shorter/noisier window) gets amplified into real
+// velocity-command jitter that the inner loops then chase continuously.
+// Back to 200 (the last value with a clean, quiet step response) to
+// check that theory -- gc~15-20Hz, well under the phase-margin-targeted
+// design but with no demonstrated chatter cost. Re-verify with another
+// SYSID_TEST_POSITION_STEP capture before trusting either number again;
+// a stability margin isn't the same thing as a quiet loop.
 // =============================================================================
 
-#define POSITION_LOOP_KP        954.5f   // (rad/s) per rad of position error -- measured: gc=32.17Hz, PM=60.7deg, GM=16.6dB, BW=32.6Hz
+#define POSITION_LOOP_KP        200.0f   // (rad/s) per rad of position error -- reverted pending buzz check, see comment above
 #define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
@@ -270,7 +312,7 @@
 // NOTE: cl_step_tick in run_position_step() increments inside the
 // position-loop-decimated block (1 kHz, POS_LOOP_DECIMATE=20), NOT the raw
 // 20kHz ISR tick -- so these counts are in 1kHz ticks, not 20kHz ticks.
-#define POSITION_STEP_AMPLITUDE_RAD  10.0f      // ~11.5 deg -- gentle first test
+#define POSITION_STEP_AMPLITUDE_RAD  1.0f      // ~11.5 deg -- gentle first test
 #define POSITION_STEP_SETTLE_TICKS   1000u     // 1s @ 1kHz
 #define POSITION_STEP_HOLD_TICKS     2000u     // 2s @ 1kHz
 
