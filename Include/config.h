@@ -22,7 +22,7 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_CL_POS_CHIRP
+#define SYSID_TEST SYSID_TEST_CL_VEL_CHIRP
 
 
 
@@ -158,7 +158,15 @@
 
 
 #define VEL_CHIRP_F_START    0.5f
-#define VEL_CHIRP_F_END     100.0f
+// Bumped 100Hz -> 300Hz: identification is only trustworthy up to roughly
+// 1/3 of the actuating current loop's bandwidth (above that, the current
+// loop's own dynamics start corrupting the "pure" plant measurement instead
+// of injecting a clean iq). That ceiling was ~165Hz when this was set at
+// the old 500Hz current-loop target; now that the current loop is
+// re-tuned to ~1000Hz (measured gc=1002.6Hz), it's ~330Hz. Also lets the
+// sweep capture the full shape of the 65-90Hz resonance instead of cutting
+// off while it's still rising.
+#define VEL_CHIRP_F_END     300.0f
 #define VEL_CHIRP_DURATION  100.0f
 // Bumped 0.1f -> 0.3f: stage now attached (was bare motor when 0.1f/0.3f/0.5f/
 // 0.7f were last characterized) and 0.1A (0.064 Nm @ KT=0.64 Nm/A) produced
@@ -240,7 +248,7 @@
 // =============================================================================
 
 #define POSITION_LOOP_KP        200.0f   // (rad/s) per rad of position error -- gc ~ 15Hz, clear of the 65-90Hz resonance
-#define POSITION_VEL_LIMIT      20.0f    // rad/s -- clamp P output, no windup state to clamp
+#define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
 // Position step test parameters
@@ -249,7 +257,7 @@
 // NOTE: cl_step_tick in run_position_step() increments inside the
 // position-loop-decimated block (1 kHz, POS_LOOP_DECIMATE=20), NOT the raw
 // 20kHz ISR tick -- so these counts are in 1kHz ticks, not 20kHz ticks.
-#define POSITION_STEP_AMPLITUDE_RAD  0.2f      // ~11.5 deg -- gentle first test
+#define POSITION_STEP_AMPLITUDE_RAD  10.0f      // ~11.5 deg -- gentle first test
 #define POSITION_STEP_SETTLE_TICKS   1000u     // 1s @ 1kHz
 #define POSITION_STEP_HOLD_TICKS     2000u     // 2s @ 1kHz
 

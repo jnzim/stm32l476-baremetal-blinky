@@ -24,7 +24,24 @@ static int32_t last_position = 0;
 // ---------------------------------------------------------------------------
 // Velocity filter config
 // ---------------------------------------------------------------------------
-#define VEL_FILTER_N  80   // 20 ticks @ 20 kHz = 4 ms window
+// Cut 80 -> 20, confirmed and locked in. The 65-90Hz "resonance" seen in
+// the CLOSED velocity loop chirp did NOT show up in the open-loop plant
+// measurement (VEL_CHIRP_F_END bumped to 300Hz, clean coherence right
+// through that band, smooth single-pole rolloff, no bump) -- ruling out a
+// real mechanical mode. This filter's group delay ((N-1)/(2*Fs), ~2ms at
+// the old N=80) was the actual cause: cutting to N=20 (1ms window, ~13.7
+// deg of phase lag at 80Hz instead of ~58 deg) took the closed-loop
+// resonance's phase crossover from 82.7Hz to 165.4Hz and gain margin from
+// 3.7dB to 8.8dB, measured (SYSID_TEST_CL_VEL_CHIRP). The backlash/
+// two-inertia theory from the earlier amplitude sweep is dropped, not just
+// amended -- this was a discretization artifact, not mechanical.
+//
+// Checked the cost before locking in: vel_meas noise during an actual
+// chirp run at N=20 is ~0.4 rad/s (std, sample-to-sample) against a 10
+// rad/s command -- ~4% relative, present but not dominant. Not pushing
+// shorter than this -- the margin problem is solved with room to spare,
+// so there's no reason to trade more noise for GM that's not needed.
+#define VEL_FILTER_N  20   // 1 ms window
                            // resolution: 1 count/ms = 0.767 rad/s
                            // at 10 rad/s -> approximately 13 counts/ms
 
