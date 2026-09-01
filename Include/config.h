@@ -22,7 +22,10 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_VEL_CHIRP
+#define SYSID_TEST SYSID_TEST_CL_POS_CHIRP
+
+
+
 
 // =============================================================================
 // SPI telemetry
@@ -97,6 +100,33 @@
 #define DT_POSITION  (1.0f /  1000.0f)
 
 // =============================================================================
+// Current loop — zero-cancellation design, 1000Hz BW target
+//
+// Bumped from a 500Hz target 2026-08-31 -- confirmed via bode_plot.py the
+// 500Hz design was landing at gc=469-499Hz (run to run) with PM=85-88 deg,
+// heavily overdamped, so there was real margin to spare. Still a full
+// decade below the 20kHz control loop's 10kHz Nyquist limit. Tradeoff:
+// doubled Kp/Ki means more control effort per unit current error, so
+// watch for the ~40mA RMS ADC noise floor (current_feedback.c) showing up
+// as buzz/noise in vq_cmd, not just PM on paper.
+//
+// Re-derived from a fresh current-loop chirp (bode_plot.py, foc-sysid):
+// fitted plant R=1.65 ohm, L=1.41mH is line-to-line-equivalent (same
+// convention as that script's R_LL/L_LL nominal) -- halve both to get the
+// true per-phase R=0.825 ohm, L=0.705mH before designing. Zero-cancellation
+// (Ki/Kp = R/L) for a 1000Hz target: Kp = wc*L = 4.43 V/A,
+// Ki = Kp/tau = 5184 V/(A*s). Previous 500Hz-target gains (2.07/2450) were
+// designed the same way against an earlier plant fit (R=1.56-1.67/L=1.32-
+// 1.38mH, halved) -- re-run bode_plot.py after any change here to confirm
+// gc lands near target against the real plant, not just by construction.
+// Same gains used for both current_loop (q-axis) and d_current_loop --
+// Ld ~= Lq for this machine (see loops.c).
+// =============================================================================
+
+#define CURRENT_LOOP_KP  4.43f      // V/A
+#define CURRENT_LOOP_KI  5184.0f    // V/(A*s)
+
+// =============================================================================
 // FOC bring-up voltages
 // =============================================================================
 
@@ -130,9 +160,15 @@
 #define VEL_CHIRP_F_START    0.5f
 #define VEL_CHIRP_F_END     100.0f
 #define VEL_CHIRP_DURATION  100.0f
-#define VEL_CHIRP_AMPLITUDE  0.1f    // resting value -- amplitude sweep (0.3/0.5/0.7A) showed strong
-                                     // friction-driven nonlinearity, not resolved tonight; tomorrow's
-                                     // friction characterization test replaces this approach
+// Bumped 0.1f -> 0.3f: stage now attached (was bare motor when 0.1f/0.3f/0.5f/
+// 0.7f were last characterized) and 0.1A (0.064 Nm @ KT=0.64 Nm/A) produced
+// zero motion -- plausibly below the stage's static/breakaway friction, not
+// a loop problem. 0.3A (0.192 Nm) was already a known, characterized point
+// on the bare motor (reactive but understood); going incremental from the
+// clamp ceiling (VEL_CHIRP_IQ_LIMIT=1.0A, 0.64 Nm) down, not guessing a
+// big number blind on a stage whose breakaway torque loaded is unknown.
+#define VEL_CHIRP_AMPLITUDE  0.9f
+
 
 // iq_cmd here is open-loop and unclamped by construction -- nothing bounds
 // it like VEL_IQ_LIMIT bounds the closed velocity loop's PI output. At
@@ -180,15 +216,30 @@
 #define CL_VEL_CHIRP_AMPLITUDE  10.0f    // rad/s
 
 // =============================================================================
-// Position loop — pure P, phase-margin-targeted design from the closed-
-// velocity-loop chirp (see closed_vel_bode_plot.py): crossover picked where
-// H(s)'s measured phase lag = 30 deg -> PM_pos = 60 deg, Kp sized from the
-// ACTUAL measured gain there, not assumed unity. Re-fit after the wiring fix
-// and VEL_KP/KI re-tune: crossover = 23.64 Hz, measured PM = 60.0 deg,
-// GM = 7.3 dB. Verify against SYSID_TEST_CL_POS_CHIRP before trusting it.
+// Position loop — pure P. Deliberately NOT the phase-margin-targeted design
+// off the closed-velocity-loop chirp anymore (that landed gc in the 41-43Hz
+// range across every amplitude tested, right against a real mechanical
+// resonance measured at 65-90Hz with only 3.2-3.7dB GM).
+//
+// That resonance shows a dip-then-peak shape in H(s) = vel_meas/vel_cmd
+// (anti-resonance ~15-30Hz, resonance ~65-90Hz) -- the classic signature of
+// a two-inertia system (motor + load through the screw/coupling's
+// compliance), consistent with this being a ball-screw stage. But its
+// frequency and Q both moved with VEL_CHIRP_AMPLITUDE (0.35/0.5/0.75/0.9A,
+// non-monotonically -- 0.5A was an outlier dip, not a trend), which a fixed
+// linear mode wouldn't do. Likely backlash in the coupling modulating
+// effective stiffness with load, not resolved yet.
+//
+// Until that's characterized/fixed mechanically, parked well below it
+// instead: gc ~ 15Hz (Kp_pos/gc ratio ~14:1 was consistent across all four
+// amplitude runs -- 200 = ~14 * 15). No notch -- a fixed notch on a
+// resonance that's already been observed to move is a bad bet; add one
+// later only once the coupling is checked and the resonance (if still
+// present) holds still. Velocity feedforward is the planned way to buy
+// back tracking performance without raising this gain.
 // =============================================================================
 
-#define POSITION_LOOP_KP        150.6f   // (rad/s) per rad of position error
+#define POSITION_LOOP_KP        200.0f   // (rad/s) per rad of position error -- gc ~ 15Hz, clear of the 65-90Hz resonance
 #define POSITION_VEL_LIMIT      20.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================

@@ -6,14 +6,19 @@
 #include "config.h"
 
 
-// Zero-cancellation design from the fitted mechanical plant (K=248.095 rad/s
-// per A, tau=13.30ms) at a 50 Hz BW target -- see bode_vel_plot.py. Re-fit
-// after the intermittent phase-wiring connection was resolved; still the
-// bare motor (stage not yet attached) -- K/tau land within a few percent of
-// the original fit (238.05 / 12.98ms), confirming the motor itself hasn't
-// changed, just re-measured cleanly this time.
-#define VEL_KP              0.0168f    // A / (rad/s)
-#define VEL_KI              1.2663f    // A / rad
+// Zero-cancellation design from the fitted mechanical plant, re-identified
+// with the stage attached (K=1623.529 rad/s per A, tau=123.67ms -- a much
+// heavier/more damped plant than the bare-motor fit this replaces) at a
+// 50 Hz BW target -- see velocity_bode_plot.py. Nominal PM = 90 deg from
+// the pole-zero-cancelled open loop, but measured phase in the 40-90Hz
+// crossover-adjacent band sits at -70 to -75 deg against a fitted -85 to
+// -88 deg there (tight, repeatable, high coherence -- not noise), so the
+// first-order model isn't a complete description right where 50Hz sits.
+// Unverified against closed-loop measurement -- run SYSID_TEST_CL_VEL_CHIRP
+// and check the real PM before trusting this like the position loop's note
+// above.
+#define VEL_KP              0.0239f    // A / (rad/s)
+#define VEL_KI              0.1935f    // A / rad
 #define VEL_IQ_LIMIT        0.5f
 
 
@@ -50,13 +55,14 @@ void loops_reset(void)
     // silently clipping at 6V the whole time. Clamp now matches the actual
     // achievable limit so the integrator stops winding up past what the
     // hardware can really deliver.
-    pi_init(&current_loop, 3.86, 5561.0f, -(V_BUS / 2.0f), (V_BUS / 2.0f));
-    //pi_init(&current_loop, 7.78f, 11153.0f, -12.0f, 12.0f);
+    //
+    // See config.h (CURRENT_LOOP_KP/KI) for the gain derivation.
+    pi_init(&current_loop, CURRENT_LOOP_KP, CURRENT_LOOP_KI, -(V_BUS / 2.0f), (V_BUS / 2.0f));
     // Same gains as the q-axis current loop -- Ld ~= Lq for this machine, so
     // the d-axis plant (id/vd) is the same R/L electrical dynamics. Cancels
     // the id = we*Lq*iq/R cross-coupling that shows up when vd is forced to
     // zero (see foc-sysid RIPPLE_DEBUG id_mean investigation).
-    pi_init(&d_current_loop, 3.86, 5561.0f, -(V_BUS / 2.0f), (V_BUS / 2.0f));
+    pi_init(&d_current_loop, CURRENT_LOOP_KP, CURRENT_LOOP_KI, -(V_BUS / 2.0f), (V_BUS / 2.0f));
     pi_init(&velocity_loop, VEL_KP, VEL_KI, -VEL_IQ_LIMIT, VEL_IQ_LIMIT);
 
 
