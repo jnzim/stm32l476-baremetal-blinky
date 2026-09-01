@@ -1,9 +1,29 @@
 // spi.c — SPI2 slave TX/RX DMA sysid latest-sample bring-up
 //
-// TX DMA is CIRC (circular) — loops over the last fully-written buffer.
-// TIM1 ISR writes to the inactive ping-pong buffer and flips the index.
-// CIRC picks up the new buffer on the next loop automatically.
-// No CS-synchronized rearm needed.
+// TX DMA is free-running CIRC over a single live buffer. The control loop
+// (TIM1 ISR) writes straight into it, unconditionally, every tick -- no
+// ping-pong, no CS check, no interrupt in the loop at all. DMA keeps
+// re-transmitting whatever is currently there, forever, entirely in
+// hardware; the Pi always gets the latest committed sample with zero
+// dependency on any ISR's latency or priority.
+//
+// This means the control loop can be (and is) the unconditional highest
+// NVIC priority in the system -- nothing here ever needs to preempt it.
+// The previous design needed EXTI15_10 (CS edge) to react within the gap
+// between Pi transactions to re-arm the TX stream; that gap turned out to
+// be tighter than one control-loop period, which is genuinely not a
+// defensible reason to let telemetry outrank the control loop. Removing
+// the need for that reaction removes the constraint instead of working
+// around it.
+//
+// Tradeoff: a torn/misaligned frame is now caught purely by the crc field,
+// same mechanism already relied on for the flags-aliasing corruption bug
+// below. After a glitched/short transaction the DMA's byte phase can drift
+// relative to the Pi's 32-byte read window (nothing here forces
+// realignment anymore); the Pi side must detect a bad CRC and resync by
+// trying the other byte rotations of what it read, the standard technique
+// for a self-framed stream. That resync logic lives in the Pi-side capture
+// tool (foc-sysid, rpi5), not in this repo.
 
 #include "spi.h"
 #include "board_f411.h"
@@ -42,17 +62,10 @@ volatile uint16_t expected_samples = 0;
 static volatile uint8_t spi2_rx_buf[SPI2_TRANSACTION_BYTES];
 
 /*
- * Ping-pong TX buffers.
- *
- * TIM1 ISR writes to spi_tx_buf[spi_tx_write_idx ^ 1] (inactive buffer),
- * then flips spi_tx_write_idx after __DMB().
- *
- * TX DMA runs CIRC over a flat 64-byte region covering both buffers.
- * It continuously loops, always reading the most recently completed frame.
- * Occasional mid-frame reads are acceptable for latest-sample telemetry.
+ * Single live TX buffer -- see file header. CIRC DMA reads it
+ * continuously; the control loop writes it in place, unconditionally.
  */
-static SysIdSample spi_tx_buf[2];
-static volatile uint8_t spi_tx_write_idx = 0;
+static SysIdSample spi_tx_buf;
 
 
 /* =============================================================================
@@ -94,11 +107,12 @@ static void spi2_dma_clear_flags(void)
 /* =============================================================================
  * Public sysid update API
  *
- * Called from TIM1 ISR at 20 kHz.
- * Writes to the inactive buffer (index ^ 1).
- * __DMB() (Data Memory Barrier) ensures all field writes are visible
- * before the index flip.
- * CIRC DMA picks up the new buffer on its next loop.
+ * Called from TIM1 ISR at 20 kHz. Writes straight into the single live
+ * buffer, unconditionally -- no CS check, no double-buffer. A write can
+ * land while the Pi is mid-transaction and hand out a torn frame; the
+ * crc field below is what catches that on the Pi side. __DMB() orders
+ * the field writes so the DMA (or a racing read) can't see a partial
+ * update.
  * =============================================================================*/
 
 void spi_sysid_update_latest(int16_t ia_mA,
@@ -115,8 +129,7 @@ void spi_sysid_update_latest(int16_t ia_mA,
                              uint16_t flags,
                              uint16_t test_id)
 {
-    uint8_t idx = spi_tx_write_idx ^ 1u;
-    SysIdSample *s = &spi_tx_buf[idx];
+    SysIdSample *s = &spi_tx_buf;
 
     s->t          = sysid_seq++;
     s->ia_mA      = ia_mA;
@@ -140,7 +153,6 @@ void spi_sysid_update_latest(int16_t ia_mA,
     s->pad        = test_id;
 
     __DMB();
-    spi_tx_write_idx = idx;
 }
 
 
@@ -233,29 +245,23 @@ void spi_init(void)
     NVIC_EnableIRQ(DMA1_Stream3_IRQn);
 
     /*
-     * TX DMA: spi_tx_buf[spi_tx_write_idx] -> SPI2->DR -> Pi MISO
+     * TX DMA: spi_tx_buf -> SPI2->DR -> Pi MISO
      *
-     * CIRC over SPI2_TRANSACTION_BYTES (32 bytes).
-     * M0AR points at the active buffer; TIM1 ISR updates spi_tx_write_idx
-     * but CIRC loops regardless — Pi always reads the latest complete frame.
-     *
-     * Note: M0AR points at buf[0] at boot. The ISR will flip to buf[1]
-     * on the first write. CIRC does not update M0AR automatically —
-     * it loops over the same 32-byte region. This means both buffers
-     * share the CIRC window only if M0AR spans both. To keep it simple,
-     * point CIRC at the full 64-byte spi_tx_buf[] and let the ISR
-     * manage which half is current via spi_tx_write_idx.
-     *
-     * At 500kHz / 32 bytes = ~512µs per loop. TIM1 ISR at 20kHz updates
-     * every 50µs. Pi reads latest sample on each CS assertion.
+     * Free-running CIRC over the single 32-byte buffer. M0AR/NDTR are set
+     * once, here, and never touched again -- no CS-triggered rearm, no
+     * interrupt in this path at all. The stream just keeps re-sending
+     * whatever spi_sysid_update_latest() last wrote, forever, entirely in
+     * hardware. See file header for the phase-drift tradeoff this implies
+     * and why it's the Pi's job (CRC-based resync) to handle, not an ISR's.
      */
     DMA1_Stream4->PAR  = (uint32_t)&SPI2->DR;
-    DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[0];
+    DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf;
     DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
     DMA1_Stream4->CR =
         (0u << DMA_SxCR_CHSEL_Pos) |
         DMA_SxCR_DIR_0             |   /* memory -> peripheral */
-        DMA_SxCR_MINC;                 /* no CIRC — rearmed per transaction */
+        DMA_SxCR_MINC              |
+        DMA_SxCR_CIRC;
 
     DMA1_Stream4->CR |= DMA_SxCR_EN;
 
@@ -278,7 +284,7 @@ void spi_init(void)
     EXTI->IMR  |=  (1u << PIN_RPI_NSS);
     EXTI->PR    =  (1u << PIN_RPI_NSS);
 
-    NVIC_SetPriority(EXTI15_10_IRQn, 0);
+    NVIC_SetPriority(EXTI15_10_IRQn, 2);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 
@@ -316,45 +322,19 @@ void DMA1_Stream3_IRQHandler(void)
 /* =============================================================================
  * CS falling edge IRQ (EXTI12) — counting only, no rearm
  * =============================================================================*/
+/*
+ * CS edge -- stats only now (cnt_cs). The old freeze bug and the rearm
+ * dance that used to live here (see git history if needed) both went
+ * away with it: DMA1_Stream4 is free-running CIRC (spi_init()), so there
+ * is nothing left to rearm and nothing this handler must do before the
+ * next transaction. It has no deadline, so its priority no longer
+ * matters for correctness -- it's set low (2) purely because that's
+ * where a no-deadline stats counter belongs, not because anything
+ * requires it.
+ */
 void EXTI15_10_IRQHandler(void)
 {
     if (!(EXTI->PR & (1u << PIN_RPI_NSS))) return;
     EXTI->PR = (1u << PIN_RPI_NSS);
     cnt_cs++;
-
-    /* Rearm TX DMA on CS rising edge (end of transaction).
-     *
-     * Root cause of the multi-ms freezes: this used to passively wait for
-     * EN to self-clear, which only happens once the stream naturally
-     * finishes all NDTR bytes. If the host's SPI transaction ever comes up
-     * short (dropped/glitched clock edges -- plausible given how much
-     * current-transient noise is on this board), the stream is left
-     * permanently mid-transfer with no more clock edges ever coming, so
-     * self-clear never happens -- confirmed live via debugger, stall_guard
-     * counting all the way down on a real stall. At NVIC priority 0
-     * (highest in the system), spinning the full bound there blocks
-     * EVERYTHING, including the main control loop, for ~6-8ms every time.
-     *
-     * Fix: force the stream off immediately instead of waiting for it to
-     * finish on its own -- EN=0 aborts the DMA regardless of transfer
-     * progress. The wait below is now only for the hardware's few-cycle
-     * disable acknowledgment (RM0383), not for transfer completion, so it
-     * should never need anywhere near the old bound again. Keeping a
-     * generous bound and the stall counter anyway, purely as a canary.
-     */
-    DMA1_Stream4->CR &= ~DMA_SxCR_EN;
-    uint32_t stall_guard = 1000u;
-    while ((DMA1_Stream4->CR & DMA_SxCR_EN) && --stall_guard) {}
-    if (stall_guard == 0u)
-    {
-        cnt_dma_stall++;
-    }
-
-    DMA1->HIFCR = DMA_HIFCR_CTCIF4 | DMA_HIFCR_CHTIF4 |
-                  DMA_HIFCR_CTEIF4  | DMA_HIFCR_CDMEIF4 | DMA_HIFCR_CFEIF4;
-
-    uint8_t idx = spi_tx_write_idx;
-    DMA1_Stream4->M0AR = (uint32_t)&spi_tx_buf[idx];
-    DMA1_Stream4->NDTR = SPI2_TRANSACTION_BYTES;
-    DMA1_Stream4->CR  |= DMA_SxCR_EN;
 }

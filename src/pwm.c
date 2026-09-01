@@ -197,7 +197,7 @@ void pwm_init(void)
 
     TIM1->DIER = TIM_DIER_UIE;
 
-    NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 1);
+    NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 0);
     NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
 
     TIM1->CR1 |= TIM_CR1_CEN;

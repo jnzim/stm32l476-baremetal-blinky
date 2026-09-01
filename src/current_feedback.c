@@ -232,7 +232,7 @@ void current_feedback_init(void)
     ADC1->CR2 |= ADC_CR2_ADON;
     ADC1->SR   = 0u;
 
-    NVIC_SetPriority(ADC_IRQn, 3);
+    NVIC_SetPriority(ADC_IRQn, 1);
     NVIC_EnableIRQ(ADC_IRQn);
 
     current_adc_raw[0] = 2048u;
