@@ -6,19 +6,31 @@
 #include "config.h"
 
 
-// Zero-cancellation design from the fitted mechanical plant, re-identified
-// with the stage attached (K=1623.529 rad/s per A, tau=123.67ms -- a much
-// heavier/more damped plant than the bare-motor fit this replaces) at a
-// 50 Hz BW target -- see velocity_bode_plot.py. Nominal PM = 90 deg from
-// the pole-zero-cancelled open loop, but measured phase in the 40-90Hz
-// crossover-adjacent band sits at -70 to -75 deg against a fitted -85 to
-// -88 deg there (tight, repeatable, high coherence -- not noise), so the
-// first-order model isn't a complete description right where 50Hz sits.
-// Unverified against closed-loop measurement -- run SYSID_TEST_CL_VEL_CHIRP
-// and check the real PM before trusting this like the position loop's note
-// above.
-#define VEL_KP              0.0239f    // A / (rad/s)
-#define VEL_KI              0.1935f    // A / rad
+// Zero-cancellation design against the plant backed out of the P-only
+// SYSID_TEST_CL_VEL_CHIRP run at CL_VEL_CHIRP_AMPLITUDE=15 rad/s (K=190.345
+// rad/s/A, tau=12.44ms, bare motor, archived
+// sysid_log_CL_Ponly_15rads_bare_20260904_1057.csv) -- the cleanest
+// measurement of this plant so far (coherence ~1.0 out to ~150Hz) and the
+// closest match to the original archived bare-motor OL fit
+// (K=242.4, tau=12.92ms), within ~4% on tau/fc. 15rad/s specifically
+// because it's the largest CL_VEL_CHIRP_AMPLITUDE that keeps peak
+// commanded iq (~Kp_Ponly*amplitude) under VEL_IQ_LIMIT=0.5A with the
+// P-only Kp=0.0239 used for that identification run -- 30rad/s clamped
+// (peak ~0.72A > 0.5A) and gave a visibly worse, inconsistent fit.
+// BW target 50Hz, same convention as the rest of this project
+// (current-loop BW / 10).
+// Closed-loop verified (SYSID_TEST_CL_VEL_CHIRP, bare motor,
+// CL_VEL_CHIRP_AMPLITUDE=15 rad/s): DC gain -0.01dB (true unity, integrator
+// working), measured -3dB BW=80.4Hz (above the 50Hz target). Loop's own
+// backed-out margin (L=H/(1-H), valid for any C(s)) is gc=44.6Hz,
+// PM=69.2 deg, GM=15.1dB -- short of the idealized 90deg a perfect
+// pole-zero cancellation assumes, real extra phase lag not yet isolated
+// (leading candidates: VEL_FILTER_N group delay, the current loop's own
+// ~300Hz dynamics, single-pole plant model being incomplete). PM<90deg is
+// exactly why measured BW (80.4Hz) exceeds gc (44.6Hz) -- mild peaking
+// near crossover, not an error. Healthy margins either way.
+#define VEL_KP              0.02053f   // A / (rad/s)
+#define VEL_KI              1.6505f    // A / rad
 #define VEL_IQ_LIMIT        0.5f
 
 
@@ -58,10 +70,6 @@ void loops_reset(void)
     //
     // See config.h (CURRENT_LOOP_KP/KI) for the gain derivation.
     pi_init(&current_loop, CURRENT_LOOP_KP, CURRENT_LOOP_KI, -(V_BUS / 2.0f), (V_BUS / 2.0f));
-    // Same gains as the q-axis current loop -- Ld ~= Lq for this machine, so
-    // the d-axis plant (id/vd) is the same R/L electrical dynamics. Cancels
-    // the id = we*Lq*iq/R cross-coupling that shows up when vd is forced to
-    // zero (see foc-sysid RIPPLE_DEBUG id_mean investigation).
     pi_init(&d_current_loop, CURRENT_LOOP_KP, CURRENT_LOOP_KI, -(V_BUS / 2.0f), (V_BUS / 2.0f));
     pi_init(&velocity_loop, VEL_KP, VEL_KI, -VEL_IQ_LIMIT, VEL_IQ_LIMIT);
 

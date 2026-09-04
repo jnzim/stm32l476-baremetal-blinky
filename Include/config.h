@@ -23,7 +23,7 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_CL_CURRENT_CHIRP
+#define SYSID_TEST SYSID_TEST_POSITION_STEP
 
 
 
@@ -138,32 +138,36 @@
 #define DT_POSITION  (1.0f /  1000.0f)
 
 // =============================================================================
-// Current loop — zero-cancellation design, back to a 500Hz BW target
+// Current loop — zero-cancellation design, actually ~255Hz, not the 500Hz
+// this section used to claim.
 //
-// Reverted from the 1000Hz bump (Kp=4.43/Ki=5184) made earlier tonight.
-// That comment predicted the exact tradeoff in advance: "doubled Kp/Ki
-// means more control effort per unit current error, watch for the ~40mA
-// RMS ADC noise floor showing up as buzz." SYSID_TEST_POSITION_STEP at
-// V_BUS=12V/POSITION_VEL_LIMIT=50 then showed continuous vq buzz (~+-2-3V,
-// spiking to the rail) and iq_meas buzz (~+-400-800mA) even at rest, not
-// just at step edges -- real evidence of that predicted cost, on top of
-// (and likely compounding with) the outer loop's own noise from
-// VEL_FILTER_N=20 and POSITION_LOOP_KP=954.5. Reverting the current loop
-// gain is the direct lever for the current-loop's own contribution to
-// that buzz, independent of the outer-loop retuning question.
+// Fresh SYSID_TEST_CURRENT_LOOP_CHIRP run (rotor locked, 1.0A amplitude,
+// bode_plot.py curve fit, coherence ~1.0 out to ~150-200Hz) gives the
+// plant as R=1.45 ohm / L=1.29mH / fc=179Hz -- superseding the previously-
+// cited "R=1.67/L=1.41mH" figure, which was a stale citation never
+// re-verified in this session. Against THIS fit, Kp=2.07/Ki=2450 (below)
+// has a zero/pole ratio of 1.053 -- essentially perfect cancellation --
+// and predicts BW=255Hz by construction. That was independently
+// corroborated by SYSID_TEST_CL_CURRENT_CHIRP (closed-loop iq_cmd->iq_meas
+// chirp, rotor locked): raw -3dB crossing 197-300Hz across two runs,
+// single-pole curve fit of the full coherent band 361Hz, backed-out real
+// margin gc=252-313Hz/PM=83-114 deg -- all consistent with a real loop
+// performing at or a bit above a ~255Hz idealized prediction, not with
+// 500Hz.
 //
-// 500Hz-target gains, designed the same zero-cancellation way against an
-// earlier plant fit (R=1.56-1.67/L=1.32-1.38mH, halved to per-phase):
-// measured landing at gc=469-499Hz (run to run) with PM=85-88 deg,
-// heavily overdamped -- real margin, but with less control effort per
-// unit current error than the 1000Hz design. Re-run bode_plot.py after
-// any change here to confirm gc against the real (now 1.67/1.41mH)
-// plant fit, not just by construction. Same gains used for both
-// current_loop (q-axis) and d_current_loop -- Ld ~= Lq for this machine
-// (see loops.c).
+// A genuine 500Hz zero-cancellation design against this plant would need
+// Kp=4.05/Ki=4555 -- close to the "1000Hz bump (Kp=4.43/Ki=5184)" already
+// tried and reverted earlier tonight for continuous idle buzz (vq
+// +-2-3V, iq_meas +-400-800mA at rest, SYSID_TEST_POSITION_STEP). Not
+// re-trying that blind. Kp=2.07/Ki=2450 is the proven-quiet value and is
+// being kept -- the fix here is the label, not the gain. Re-run
+// bode_plot.py + SYSID_TEST_CL_CURRENT_CHIRP again if R/L is ever
+// re-measured, rather than trusting this citation indefinitely either.
+// Same gains used for both current_loop (q-axis) and d_current_loop --
+// Ld ~= Lq for this machine (see loops.c).
 // =============================================================================
 
-#define CURRENT_LOOP_KP  2.07f      // V/A
+#define CURRENT_LOOP_KP  2.07f      // V/A -- ~255Hz zero-cancellation vs R=1.45/L=1.29mH, proven quiet
 #define CURRENT_LOOP_KI  2450.0f    // V/(A*s)
 
 // =============================================================================
@@ -219,7 +223,7 @@
 // on the bare motor (reactive but understood); going incremental from the
 // clamp ceiling (VEL_CHIRP_IQ_LIMIT=1.0A, 0.64 Nm) down, not guessing a
 // big number blind on a stage whose breakaway torque loaded is unknown.
-#define VEL_CHIRP_AMPLITUDE  0.9f
+#define VEL_CHIRP_AMPLITUDE  0.1f
 
 
 // iq_cmd here is open-loop and unclamped by construction -- nothing bounds
@@ -265,7 +269,7 @@
 #define CL_VEL_CHIRP_F_START     0.5f
 #define CL_VEL_CHIRP_F_END     200.0f
 #define CL_VEL_CHIRP_DURATION   60.0f
-#define CL_VEL_CHIRP_AMPLITUDE  10.0f    // rad/s
+#define CL_VEL_CHIRP_AMPLITUDE  15.0f    // rad/s
 
 // =============================================================================
 // Closed current loop chirp — sweeps iq_cmd (not Vq) with the current PI
@@ -279,7 +283,7 @@
 #define CL_CURRENT_CHIRP_F_START        1.0f
 #define CL_CURRENT_CHIRP_F_END       2000.0f
 #define CL_CURRENT_CHIRP_DURATION      20.0f
-#define CL_CURRENT_CHIRP_AMPLITUDE      0.3f    // A
+#define CL_CURRENT_CHIRP_AMPLITUDE      1.0f    // A
 #define CL_CURRENT_CHIRP_SETTLE_TICKS  20u
 
 // =============================================================================
@@ -311,14 +315,23 @@
 // which points at this gain: at 954.5, ordinary vel_meas noise (from
 // VEL_FILTER_N=20's shorter/noisier window) gets amplified into real
 // velocity-command jitter that the inner loops then chase continuously.
-// Back to 200 (the last value with a clean, quiet step response) to
-// check that theory -- gc~15-20Hz, well under the phase-margin-targeted
-// design but with no demonstrated chatter cost. Re-verify with another
-// SYSID_TEST_POSITION_STEP capture before trusting either number again;
-// a stability margin isn't the same thing as a quiet loop.
+// Was reverted to 200 (the last value with a clean, quiet step response)
+// on the STAGE-ATTACHED config -- that history stands, but doesn't
+// directly apply here since VEL_KP/KI were just re-designed against a
+// fresh bare-motor plant (see loops.c) and closed-loop verified
+// (gc=44.6Hz, PM=69.2deg, GM=15.1dB, BW=80.4Hz).
+//
+// New phase-margin-targeted design from that same verification run's own
+// closed_vel_bode_plot.py output (not assumed, read directly off the
+// measured H(s)): gc=24.88Hz, PM=60.0deg, GM=12.1dB, Kp_pos=151.2 --
+// ~6.3x smaller than the 954.5 that caused chatter before, so lower risk,
+// but still phase-margin-targeted rather than the conservative
+// decade-below-BW option (Kp_pos=50.51) and UNTRIED at this exact value.
+// SYSID_TEST_POSITION_STEP first (bare motor) to check for idle chatter,
+// same discipline as last time, before trusting this for anything else.
 // =============================================================================
 
-#define POSITION_LOOP_KP        200.0f   // (rad/s) per rad of position error -- reverted pending buzz check, see comment above
+#define POSITION_LOOP_KP        151.2f   // (rad/s) per rad of position error -- new bare-motor design, UNTRIED, verify with a step test first
 #define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
