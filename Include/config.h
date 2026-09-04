@@ -23,7 +23,7 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_POSITION_STEP
+#define SYSID_TEST SYSID_TEST_CL_POS_CHIRP
 
 
 
@@ -321,17 +321,28 @@
 // fresh bare-motor plant (see loops.c) and closed-loop verified
 // (gc=44.6Hz, PM=69.2deg, GM=15.1dB, BW=80.4Hz).
 //
-// New phase-margin-targeted design from that same verification run's own
-// closed_vel_bode_plot.py output (not assumed, read directly off the
-// measured H(s)): gc=24.88Hz, PM=60.0deg, GM=12.1dB, Kp_pos=151.2 --
-// ~6.3x smaller than the 954.5 that caused chatter before, so lower risk,
-// but still phase-margin-targeted rather than the conservative
-// decade-below-BW option (Kp_pos=50.51) and UNTRIED at this exact value.
-// SYSID_TEST_POSITION_STEP first (bare motor) to check for idle chatter,
-// same discipline as last time, before trusting this for anything else.
+// Re-derived as a frequency-ratio design instead: pick outer crossover at
+// 1/3-1/5 of the velocity loop's measured -3dB BW (80.4Hz), read H(jf)
+// AT that frequency from the same verification run's raw data (not
+// assumed unity), size Kp_pos so |Kp_pos*H(jf)/jf|=1 there:
+//   1/3  (26.80Hz): H=0.26dB   Kp_pos=163.37  PM=57.7deg
+//   1/4  (20.10Hz): H=0.13dB   Kp_pos=124.45  PM=68.0deg  <- chosen, middle of range
+//   1/5  (16.08Hz): H=0.24dB   Kp_pos=98.31   PM=73.1deg
+//
+// Closed-loop verified directly (SYSID_TEST_CL_POS_CHIRP, bare motor,
+// whole-system H_pos(s)=pos_meas/pos_cmd, margin backed out via
+// L=H_pos/(1-H_pos)): gain crossover landed at 21.11Hz, within 5% of the
+// 20.10Hz this Kp was sized for -- reading real H(jf) instead of assuming
+// unity gain got the crossover right. PM=73.0deg (beat the 68.0deg
+// prediction), GM=16.6dB. Measured -3dB bandwidth is 42.64Hz, roughly 2x
+// the crossover -- NOT the same thing as gc, don't confuse the two: BW
+// exceeding gc is the standard consequence of PM<90deg (mild peaking near
+// crossover extends the -3dB point outward), same mechanism as the
+// velocity loop's 80.4Hz BW vs its 44.6Hz gc. The number actually designed
+// for (crossover) landed almost exactly on target.
 // =============================================================================
 
-#define POSITION_LOOP_KP        151.2f   // (rad/s) per rad of position error -- new bare-motor design, UNTRIED, verify with a step test first
+#define POSITION_LOOP_KP        124.45f  // (rad/s) per rad of position error -- BW/4 design, closed-loop verified: gc=21.1Hz/PM=73.0deg/GM=16.6dB
 #define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
