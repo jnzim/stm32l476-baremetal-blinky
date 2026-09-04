@@ -192,6 +192,79 @@ static void run_current_lp_chirp(void)
 
 
 // =============================================================================
+// run_cl_current_chirp — CLOSED current loop chirp: sweeps iq_cmd (not Vq)
+// with the current PI closed around it, to directly measure the closed-loop
+// response H(s) = iq_meas/iq_cmd and back out the loop's real open-loop
+// margin via L = H/(1-H) -- exact algebra, no assumption that C(s) is the
+// linear Kp+Ki/s it's designed to be. bode_plot.py's method (measure the
+// bare electrical plant open-loop, then combine it with the *assumed*
+// linear C(s)) was shown on the velocity loop to disagree with a real
+// closed-loop measurement by 37% on crossover frequency, most likely from
+// saturation -- this test exists to get the current loop's real margin the
+// same trustworthy way, not repeat that assumption here too.
+//
+// Velocity loop plays no part in this test: iq_cmd is driven directly by
+// the chirp, same as run_current_lp_chirp's open-loop version -- the only
+// difference is that reference now goes through the closed current PI
+// instead of driving Vq directly.
+//
+// Telemetry slot usage:
+//   sysid_f_Hz slot -> iq_cmd * 1000  [mA]
+//   iq_cmd_mA slot  -> iq_meas (i_q_meas, already logged natively) [mA]
+// =============================================================================
+
+static float cl_current_chirp_t         = 0.0f;
+static float cl_current_chirp_angle_rad = 0.0f;
+
+static void run_cl_current_chirp(void)
+{
+    float theta = foc_theta_from_encoder();
+
+    if (!current_feedback_sample_valid()) { return; }
+
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
+
+    if (vel_chirp_settle_tick < CL_CURRENT_CHIRP_SETTLE_TICKS)
+    {
+        iq_cmd = 0.0f;
+        ++vel_chirp_settle_tick;
+    }
+    else
+    {
+        sysid_f = CL_CURRENT_CHIRP_F_START *
+                  powf(CL_CURRENT_CHIRP_F_END / CL_CURRENT_CHIRP_F_START,
+                       cl_current_chirp_t / CL_CURRENT_CHIRP_DURATION);
+
+        cl_current_chirp_angle_rad += FOC_TWO_PI * sysid_f * SYSID_DT;
+        if (cl_current_chirp_angle_rad >= FOC_TWO_PI)
+            cl_current_chirp_angle_rad -= FOC_TWO_PI;
+
+        // sinf, not cosf -- continuous with the settle phase's iq_cmd=0.0f
+        // hold, same reasoning as run_cl_vel_chirp.
+        iq_cmd = CL_CURRENT_CHIRP_AMPLITUDE * sinf(cl_current_chirp_angle_rad);
+
+        cl_current_chirp_t += SYSID_DT;
+
+        if (cl_current_chirp_t >= CL_CURRENT_CHIRP_DURATION)
+        {
+            iq_cmd         = 0.0f;
+            foc_vd_applied = 0.0f;
+            foc_vq_applied = 0.0f;
+            pwm_apply_dq(0.0f, 0.0f, theta);
+            sysid_stage = SYSID_STAGE_IDLE;
+            return;
+        }
+    }
+
+    foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
+
+    pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
+}
+
+
+// =============================================================================
 // run_vel_chirp — CL iq chirp for mechanical plant identification
 // =============================================================================
 
@@ -901,6 +974,8 @@ void foc_sysid_step(void)
             run_current_lp_chirp();
         #elif SYSID_TEST == SYSID_TEST_CURRENT_LOOP_STEP
             run_cl_current_step();
+        #elif SYSID_TEST == SYSID_TEST_CL_CURRENT_CHIRP
+            run_cl_current_chirp();
         #elif SYSID_TEST == SYSID_TEST_VEL_CHIRP
             run_vel_chirp();
         #elif SYSID_TEST == SYSID_TEST_CL_VEL_STEP
@@ -991,6 +1066,18 @@ void foc_sysid_step(void)
      */
     int16_t sysid_f_slot = (int16_t)(pos_cmd_rad * 1000.0f);
     int16_t last_slot    = (int16_t)(pos_meas_rad * 1000.0f);
+
+#elif SYSID_TEST == SYSID_TEST_CL_CURRENT_CHIRP
+
+    /* Closed-loop current chirp:
+     *   sysid_f slot -> current command [mA]
+     *   last slot    -> measured current [mA] (mirrors i_q_meas, already
+     *                   logged natively in iq_mA -- kept here too so the
+     *                   Pi-side script can use the same H=last/sysid_f
+     *                   pattern every other closed-loop chirp test uses)
+     */
+    int16_t sysid_f_slot = (int16_t)(iq_cmd * 1000.0f);
+    int16_t last_slot    = (int16_t)(i_q_meas * 1000.0f);
 
 #elif SYSID_TEST == SYSID_TEST_CURRENT_LOOP_STEP
 
@@ -1113,6 +1200,9 @@ void foc_sysid_reset(void)
     i_d_meas = i_q_meas = 0.0f;
 
     vel_chirp_settle_tick   = 0u;
+
+    cl_current_chirp_t         = 0.0f;
+    cl_current_chirp_angle_rad = 0.0f;
 
     pos_chirp_settle_tick  = 0u;
     cl_pos_chirp_t         = 0.0f;

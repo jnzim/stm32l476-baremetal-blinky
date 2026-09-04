@@ -15,6 +15,7 @@
 #define SYSID_TEST_CURRENT_LOOP_CHIRP       0
 #define SYSID_TEST_CURRENT_LOOP_STEP        1
 #define SYSID_TEST_VEL_CHIRP                2
+#define SYSID_TEST_CL_CURRENT_CHIRP         3
 #define SYSID_TEST_CL_VEL_STEP              4
 #define RIPPLE_DEBUG                        5
 #define SYSID_TEST_CL_VEL_CHIRP             6
@@ -22,7 +23,7 @@
 #define SYSID_TEST_CL_POS_CHIRP             8
 #define SYSID_TEST_CINE_SWEEP               9
 
-#define SYSID_TEST SYSID_TEST_POSITION_STEP
+#define SYSID_TEST SYSID_TEST_CL_CURRENT_CHIRP
 
 
 
@@ -265,6 +266,21 @@
 #define CL_VEL_CHIRP_F_END     200.0f
 #define CL_VEL_CHIRP_DURATION   60.0f
 #define CL_VEL_CHIRP_AMPLITUDE  10.0f    // rad/s
+
+// =============================================================================
+// Closed current loop chirp — sweeps iq_cmd (not Vq) with the current PI
+// closed, to directly measure H(s) = iq_meas/iq_cmd and back out the real
+// closed-loop margin (L = H/(1-H)) instead of assuming C(s)=Kp+Ki/s and
+// combining it with the separately-measured open-loop electrical plant
+// (bode_plot.py's method -- shown on the velocity loop to be off by 37% on
+// crossover, most likely from saturation invalidating that assumption).
+// =============================================================================
+
+#define CL_CURRENT_CHIRP_F_START        1.0f
+#define CL_CURRENT_CHIRP_F_END       2000.0f
+#define CL_CURRENT_CHIRP_DURATION      20.0f
+#define CL_CURRENT_CHIRP_AMPLITUDE      0.3f    // A
+#define CL_CURRENT_CHIRP_SETTLE_TICKS  20u
 
 // =============================================================================
 // Position loop — pure P, back to the phase-margin-targeted design off the
