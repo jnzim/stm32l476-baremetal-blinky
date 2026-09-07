@@ -104,24 +104,18 @@ void foc_trajectory_step(void)
             current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
 
             // ── Velocity loop @ 5 kHz ────────────────────────────────────────
-            // if (++vel_div >= 4u)
-            // {
-            //     vel_div = 0u;
-            //     float vel_fbk_rad = (float)encoder_get_velocity() / COUNTS_PER_RAD;
-            //     iq_cmd = pi_step(&velocity_loop,
-            //                      vel_cmd_rad_sec - vel_fbk_rad,
-            //                      DT_VELOCITY);
-            // }
+            if (++vel_div >= 4u)
+            {
+                vel_div = 0u;
+                float vel_fbk_rad = (float)encoder_get_velocity() / COUNTS_PER_RAD;
+                iq_cmd = velocity_loop_step(vel_cmd_rad_sec, vel_fbk_rad, DT_VELOCITY);
+            }
 
             // ── Current loop @ 20 kHz ────────────────────────────────────────
             foc_vd_applied = 0.0f;
             foc_vq_applied = pi_step(&current_loop,
                                      iq_cmd - i_q_meas,
                                      DT_CURRENT);
-            if( foc_vq_applied > 0 )
-            {
-                volatile float testVar = foc_vq_applied;
-            }
             pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
         }
         break;

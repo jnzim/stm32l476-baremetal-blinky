@@ -34,6 +34,14 @@ volatile bool     system_initialized = false;
 // relying on the debugger (register-view has been unreliable this session).
 volatile uint32_t g_reset_cause    = 0;
 
+// Captured once, right after drv_enable_high(), so a genuinely faulted
+// half-bridge (nFAULT/FAULT_STATUS_1/VGS_STATUS_2) shows up even without
+// PWM ever running -- doesn't rely on the debugger's register view (see
+// g_reset_cause above). Wired into ALIGN-stage telemetry (foc_sysid.c).
+volatile uint16_t g_drv_fault_status_1 = 0;
+volatile uint16_t g_drv_vgs_status_2   = 0;
+volatile bool     g_drv_nfault_pin_ok  = false;
+
 void TIM1_UP_TIM10_IRQHandler(void)
 {
     TIM1->SR = ~TIM_SR_UIF;
@@ -113,6 +121,14 @@ int main(void)
     pwm_init();
     current_feedback_init();
     drv_enable_high();
+
+    {
+        Drv8353Status drv_status = drv8353_read_status();
+        g_drv_fault_status_1 = drv_status.fault_status_1;
+        g_drv_vgs_status_2   = drv_status.vgs_status_2;
+        g_drv_nfault_pin_ok  = drv_status.n_fault_pin;
+    }
+
     current_feedback_calibrate();
     pwm_enable();
 

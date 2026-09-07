@@ -54,7 +54,7 @@ static float sysid_f            = SYSID_F_START;
 // CL step state
 // =============================================================================
 
-#define CL_STEP_AMPLITUDE       0.28f        // A
+#define CL_STEP_AMPLITUDE       0.3f        // A
 #define CL_STEP_VEL_AMPLITUDE   10.0       // rad/s
 #define CL_STEP_HOLD_TICKS      5000u       
 #define CL_STEP_SETTLE_TICKS    1000u     
@@ -510,6 +510,363 @@ static void run_cl_vel_step(void)
 }
 
 
+// =============================================================================
+// run_friction_sweep — closed velocity loop (production PI), series of
+// constant-velocity holds from FRICTION_SWEEP_V_MIN to FRICTION_SWEEP_V_MAX,
+// one full ascending sweep per direction. See config.h for the full
+// rationale. loops_reset() already put the real VEL_KP/VEL_KI into
+// velocity_loop at ALIGN->RUN -- no P-only override here, unlike
+// CL_VEL_CHIRP's plant-ID trick, because a real integrator is required for
+// steady-state i_q to equal the friction torque instead of sitting at
+// whatever partial-tracking error a P-only loop would leave.
+//
+// Telemetry: same convention as CL_VEL_STEP/CL_VEL_CHIRP --
+//   sysid_f slot -> vel_cmd_rad_sec [mrad/s]
+//   last slot    -> vel_meas_counts [counts/s]
+// iq_mA (native slot) is the actual measurement of interest -- per-step
+// steady-state averaging is a Pi-side post-processing step (grab the tail
+// of each ~1s hold), same division of labor as every other sysid test here.
+// =============================================================================
+
+typedef enum
+{
+    FRICTION_SETTLE_START = 0,
+    FRICTION_SWEEP_POS,
+    FRICTION_SETTLE_MID,
+    FRICTION_SWEEP_NEG,
+    FRICTION_SETTLE_END,
+    FRICTION_DONE
+} FrictionSweepPhase;
+
+static FrictionSweepPhase friction_phase          = FRICTION_SETTLE_START;
+static uint32_t           friction_tick           = 0u;
+static float              friction_step           = FRICTION_SWEEP_V_MIN;
+static int32_t            friction_sweep_start_pos = 0;
+
+static void run_friction_sweep(void)
+{
+    float theta = foc_theta_from_encoder();
+
+    if (!current_feedback_sample_valid()) { return; }
+
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
+
+    vel_meas_counts = encoder_get_velocity();
+
+    if (++vel_loop_tick >= VEL_LOOP_DECIMATE)
+    {
+        vel_loop_tick = 0;
+
+        float vel_meas_rad = vel_meas_counts * (FOC_TWO_PI / ENCODER_CPR);
+
+        // Hard position-limit backstop, independent of the hold-time
+        // arithmetic sized in config.h -- see FRICTION_SWEEP_POS_LIMIT_MM.
+        // Checked every tick, not just at step boundaries, so a runaway
+        // shows up immediately rather than only being caught at the next
+        // scheduled transition.
+        float disp_mm = (float)(encoder_get_position() - friction_sweep_start_pos) *
+                         (STAGE_LEAD_MM_PER_REV / (float)ENCODER_CPR);
+        bool  limit_hit = (fabsf(disp_mm) > FRICTION_SWEEP_POS_LIMIT_MM);
+
+        switch (friction_phase)
+        {
+            case FRICTION_SETTLE_START:
+                vel_cmd_rad_sec = 0.0f;
+                if (++friction_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    friction_tick            = 0u;
+                    friction_step            = FRICTION_SWEEP_V_MIN;
+                    friction_sweep_start_pos = encoder_get_position();
+                    friction_phase           = FRICTION_SWEEP_POS;
+                }
+                break;
+
+            case FRICTION_SWEEP_POS:
+                vel_cmd_rad_sec = friction_step;
+                if (limit_hit)
+                {
+                    friction_tick  = 0u;
+                    friction_phase = FRICTION_SETTLE_MID;
+                }
+                else if (++friction_tick >= FRICTION_SWEEP_HOLD_TICKS)
+                {
+                    friction_tick = 0u;
+                    friction_step += FRICTION_SWEEP_V_STEP;
+                    if (friction_step > FRICTION_SWEEP_V_MAX + 0.5f * FRICTION_SWEEP_V_STEP)
+                    {
+                        friction_phase = FRICTION_SETTLE_MID;
+                    }
+                }
+                break;
+
+            case FRICTION_SETTLE_MID:
+                vel_cmd_rad_sec = 0.0f;
+                if (++friction_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    friction_tick            = 0u;
+                    friction_step            = FRICTION_SWEEP_V_MIN;
+                    friction_sweep_start_pos = encoder_get_position();
+                    friction_phase           = FRICTION_SWEEP_NEG;
+                }
+                break;
+
+            case FRICTION_SWEEP_NEG:
+                vel_cmd_rad_sec = -friction_step;
+                if (limit_hit)
+                {
+                    friction_tick  = 0u;
+                    friction_phase = FRICTION_SETTLE_END;
+                }
+                else if (++friction_tick >= FRICTION_SWEEP_HOLD_TICKS)
+                {
+                    friction_tick = 0u;
+                    friction_step += FRICTION_SWEEP_V_STEP;
+                    if (friction_step > FRICTION_SWEEP_V_MAX + 0.5f * FRICTION_SWEEP_V_STEP)
+                    {
+                        friction_phase = FRICTION_SETTLE_END;
+                    }
+                }
+                break;
+
+            case FRICTION_SETTLE_END:
+                vel_cmd_rad_sec = 0.0f;
+                if (++friction_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    friction_tick  = 0u;
+                    friction_phase = FRICTION_DONE;
+                    sysid_stage    = SYSID_STAGE_IDLE;
+                }
+                break;
+
+            case FRICTION_DONE:
+            default:
+                vel_cmd_rad_sec = 0.0f;
+                iq_cmd          = 0.0f;
+                foc_vd_applied  = 0.0f;
+                foc_vq_applied  = 0.0f;
+                pwm_apply_dq(0.0f, 0.0f, theta);
+                return;
+        }
+
+        iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+    }
+
+    foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
+
+    pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
+}
+
+
+// =============================================================================
+// run_breakaway — static friction / breakaway current, both directions.
+// See config.h for the full safety rationale. Slow open current-loop ramp
+// from rest; the instant real motion is confirmed (debounced encoder
+// velocity threshold), immediately hands off to the closed velocity loop
+// at a low target instead of continuing the ramp -- that handoff is what
+// keeps this from repeating the earlier ~10.5A ring-out, since the closed
+// loop settles toward the known ~94mA kinetic current instead of
+// continuing to apply whatever torque the ramp had built up.
+//
+// Telemetry:
+//   sysid_f slot -> commanded iq [mA] (ramp value, or the handoff PI's
+//                   output once breakaway is detected)
+//   last slot    -> measured velocity [counts/s] -- find the tick velocity
+//                   first crosses the threshold, read sysid_f at that same
+//                   row for the breakaway current
+//   enc_hi slot  -> breakaway_phase (see BreakawayPhase below)
+//   enc_lo slot  -> raw encoder position low word (unchanged default use)
+// =============================================================================
+
+typedef enum
+{
+    BREAKAWAY_SETTLE_START = 0,
+    BREAKAWAY_RAMP_POS,
+    BREAKAWAY_HANDOFF_POS,
+    BREAKAWAY_SETTLE_MID,
+    BREAKAWAY_RAMP_NEG,
+    BREAKAWAY_HANDOFF_NEG,
+    BREAKAWAY_SETTLE_END,
+    BREAKAWAY_DONE
+} BreakawayPhase;
+
+static BreakawayPhase breakaway_phase         = BREAKAWAY_SETTLE_START;
+static uint32_t        breakaway_tick         = 0u;
+static float            breakaway_iq_ramp     = 0.0f;
+static uint32_t        breakaway_detect_count = 0u;
+static int32_t          breakaway_start_pos   = 0;
+
+static void run_breakaway(void)
+{
+    float theta = foc_theta_from_encoder();
+
+    if (!current_feedback_sample_valid()) { return; }
+
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+    current_feedback_get_dq(theta, &i_d_meas, &i_q_meas);
+
+    vel_meas_counts = encoder_get_velocity();
+
+    if (++vel_loop_tick >= VEL_LOOP_DECIMATE)
+    {
+        vel_loop_tick = 0;
+
+        float vel_meas_rad = vel_meas_counts * (FOC_TWO_PI / ENCODER_CPR);
+        float disp_mm = (float)(encoder_get_position() - breakaway_start_pos) *
+                         (STAGE_LEAD_MM_PER_REV / (float)ENCODER_CPR);
+        bool  limit_hit = (fabsf(disp_mm) > BREAKAWAY_POS_LIMIT_MM);
+
+        // 5000.0f = 5kHz decimated rate (1/DT_VELOCITY) -- ramp reaches
+        // BREAKAWAY_IQ_CEILING after BREAKAWAY_RAMP_DURATION seconds if no
+        // breakaway is detected first.
+        float ramp_step = BREAKAWAY_IQ_CEILING / (BREAKAWAY_RAMP_DURATION * 5000.0f);
+
+        switch (breakaway_phase)
+        {
+            case BREAKAWAY_SETTLE_START:
+                vel_cmd_rad_sec = 0.0f;
+                iq_cmd          = 0.0f;
+                if (++breakaway_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    breakaway_tick         = 0u;
+                    breakaway_iq_ramp      = 0.0f;
+                    breakaway_detect_count = 0u;
+                    breakaway_start_pos    = encoder_get_position();
+                    breakaway_phase        = BREAKAWAY_RAMP_POS;
+                }
+                break;
+
+            case BREAKAWAY_RAMP_POS:
+                breakaway_iq_ramp += ramp_step;
+                if (breakaway_iq_ramp > BREAKAWAY_IQ_CEILING) breakaway_iq_ramp = BREAKAWAY_IQ_CEILING;
+                iq_cmd = breakaway_iq_ramp;
+
+                if (fabsf(vel_meas_rad) > BREAKAWAY_DETECT_THRESH_RAD_S)
+                {
+                    ++breakaway_detect_count;
+                }
+                else
+                {
+                    breakaway_detect_count = 0u;
+                }
+
+                if (limit_hit)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_MID;
+                }
+                else if (breakaway_detect_count >= BREAKAWAY_DETECT_TICKS)
+                {
+                    // Breakaway confirmed -- hand off to the closed velocity
+                    // loop immediately, don't keep ramping.
+                    velocity_loop.integrator = 0.0f;
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_HANDOFF_POS;
+                }
+                else if (breakaway_iq_ramp >= BREAKAWAY_IQ_CEILING)
+                {
+                    // Ceiling reached, no breakaway seen -- give up, don't
+                    // hold max current indefinitely.
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_MID;
+                }
+                break;
+
+            case BREAKAWAY_HANDOFF_POS:
+                vel_cmd_rad_sec = BREAKAWAY_HANDOFF_VEL;
+                iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+                if (limit_hit || ++breakaway_tick >= BREAKAWAY_HANDOFF_TICKS)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_MID;
+                }
+                break;
+
+            case BREAKAWAY_SETTLE_MID:
+                vel_cmd_rad_sec = 0.0f;
+                iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+                if (++breakaway_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    breakaway_tick         = 0u;
+                    breakaway_iq_ramp      = 0.0f;
+                    breakaway_detect_count = 0u;
+                    breakaway_start_pos    = encoder_get_position();
+                    breakaway_phase        = BREAKAWAY_RAMP_NEG;
+                }
+                break;
+
+            case BREAKAWAY_RAMP_NEG:
+                breakaway_iq_ramp += ramp_step;
+                if (breakaway_iq_ramp > BREAKAWAY_IQ_CEILING) breakaway_iq_ramp = BREAKAWAY_IQ_CEILING;
+                iq_cmd = -breakaway_iq_ramp;
+
+                if (fabsf(vel_meas_rad) > BREAKAWAY_DETECT_THRESH_RAD_S)
+                {
+                    ++breakaway_detect_count;
+                }
+                else
+                {
+                    breakaway_detect_count = 0u;
+                }
+
+                if (limit_hit)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_END;
+                }
+                else if (breakaway_detect_count >= BREAKAWAY_DETECT_TICKS)
+                {
+                    velocity_loop.integrator = 0.0f;
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_HANDOFF_NEG;
+                }
+                else if (breakaway_iq_ramp >= BREAKAWAY_IQ_CEILING)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_END;
+                }
+                break;
+
+            case BREAKAWAY_HANDOFF_NEG:
+                vel_cmd_rad_sec = -BREAKAWAY_HANDOFF_VEL;
+                iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+                if (limit_hit || ++breakaway_tick >= BREAKAWAY_HANDOFF_TICKS)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_SETTLE_END;
+                }
+                break;
+
+            case BREAKAWAY_SETTLE_END:
+                vel_cmd_rad_sec = 0.0f;
+                iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+                if (++breakaway_tick >= FRICTION_SWEEP_SETTLE_TICKS)
+                {
+                    breakaway_tick  = 0u;
+                    breakaway_phase = BREAKAWAY_DONE;
+                    sysid_stage     = SYSID_STAGE_IDLE;
+                }
+                break;
+
+            case BREAKAWAY_DONE:
+            default:
+                vel_cmd_rad_sec = 0.0f;
+                iq_cmd          = 0.0f;
+                foc_vd_applied  = 0.0f;
+                foc_vq_applied  = 0.0f;
+                pwm_apply_dq(0.0f, 0.0f, theta);
+                return;
+        }
+    }
+
+    foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
+    foc_vq_applied = pi_step(&current_loop, iq_cmd - i_q_meas, SYSID_DT);
+
+    pwm_apply_dq(foc_vd_applied, foc_vq_applied, theta);
+}
+
+
 // ============================================= ================================
 // run_cl_vel_chirp — CLOSED velocity loop chirp: sweeps vel_cmd (not iq)
 // with the velocity PI closed around it, to identify the closed-loop
@@ -543,6 +900,15 @@ static void run_cl_vel_chirp(void)
 
         if (vel_chirp_settle_tick < CL_VEL_CHIRP_SETTLE_TICKS)
         {
+            if (vel_chirp_settle_tick == 0u)
+            {
+                // P-only velocity loop for this identification run -- see
+                // CL_VEL_CHIRP_PONLY_KP in config.h for why. velocity_loop is
+                // a shared global (loops.c); loops_reset() puts the real
+                // VEL_KP/VEL_KI back at the next ALIGN->RUN transition.
+                pi_init(&velocity_loop, CL_VEL_CHIRP_PONLY_KP, 0.0f, -0.5f, 0.5f);
+            }
+
             vel_cmd_rad_sec = 0.0f;
             ++vel_chirp_settle_tick;
         }
@@ -577,7 +943,10 @@ static void run_cl_vel_chirp(void)
             }
         }
 
-        iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+        // PI + friction feedforward, now centralized in loops.c
+        // (velocity_loop_step) so this sysid test and real trajectory mode
+        // share the same friction compensation instead of duplicating it.
+        iq_cmd = velocity_loop_step(vel_cmd_rad_sec, vel_meas_rad, DT_VELOCITY);
     }
 
     foc_vd_applied = pi_step(&d_current_loop, 0.0f - i_d_meas, SYSID_DT);
@@ -693,7 +1062,10 @@ static void run_position_step(void)
     {
         vel_loop_tick = 0;
         float vel_meas_rad = vel_meas_counts * (FOC_TWO_PI / ENCODER_CPR);
-        iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+        // velocity_loop_step(), not a raw pi_step() -- same reason as
+        // run_cl_pos_chirp(): POSITION_LOOP_KP was sized against the
+        // feedforward-compensated system.
+        iq_cmd = velocity_loop_step(vel_cmd_rad_sec, vel_meas_rad, DT_VELOCITY);
     }
 
     // ── Current loop — 20 kHz ────────────────────────────────────────────────
@@ -788,7 +1160,10 @@ static void run_cl_pos_chirp(void)
     {
         vel_loop_tick = 0;
         float vel_meas_rad = vel_meas_counts * (FOC_TWO_PI / ENCODER_CPR);
-        iq_cmd = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, DT_VELOCITY);
+        // velocity_loop_step(), not a raw pi_step() -- POSITION_LOOP_KP was
+        // sized against the feedforward-compensated H(s), so verifying it
+        // needs the same feedforward active underneath, not the bare PI.
+        iq_cmd = velocity_loop_step(vel_cmd_rad_sec, vel_meas_rad, DT_VELOCITY);
     }
 
     // ── Current loop — 20 kHz ────────────────────────────────────────────────
@@ -888,6 +1263,133 @@ static void run_cine_sweep(void)
 
 
 // =============================================================================
+// run_phase_check — per-phase DC excitation, isolates a bad phase connection
+// (motor/driver not energizing that phase) from a bad current-sense channel
+// (phase is energized fine, but that ADC channel doesn't show it). Drives
+// each phase to +PHASE_CHECK_V_MAIN in turn (other two split the balanced
+// return at PHASE_CHECK_V_RETURN each -- same magnitude run_voltage_test
+// already proved safe held for 30s), holding long enough to read a settled
+// DC value on all three sense channels every tick.
+//
+// Expected healthy result per step: the driven phase reads ~+I, the other
+// two read ~-I/2 each, and ia+ib+ic ~= 0 throughout (KCL, same check
+// SYSID_TEST_CURRENT_LOOP_STEP already logs). A phase that isn't actually
+// energized (bad connector/ferrule) reads near-zero or noisy/non-settling
+// current on ALL three channels during its own excitation step (broken
+// loop, no current path at all). A dead/miswired sense channel instead
+// shows the OTHER two channels responding correctly (proving current IS
+// flowing) while that one channel stays flat/wrong-signed -- energization
+// is fine, only the feedback path is bad.
+// =============================================================================
+
+typedef enum
+{
+    PHASE_CHECK_A = 0,
+    PHASE_CHECK_ZERO_A,
+    PHASE_CHECK_B,
+    PHASE_CHECK_ZERO_B,
+    PHASE_CHECK_C,
+    PHASE_CHECK_ZERO_C,
+    PHASE_CHECK_DONE
+} PhaseCheckStage;
+
+static PhaseCheckStage phase_check_stage = PHASE_CHECK_A;
+static uint32_t        phase_check_tick  = 0u;
+
+static void run_phase_check(void)
+{
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+
+    switch (phase_check_stage)
+    {
+        case PHASE_CHECK_A:
+            pwm_apply_phase_volts(PHASE_CHECK_V_MAIN, PHASE_CHECK_V_RETURN, PHASE_CHECK_V_RETURN);
+            if (++phase_check_tick >= PHASE_CHECK_HOLD_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_ZERO_A; }
+            break;
+
+        case PHASE_CHECK_ZERO_A:
+            pwm_apply_phase_volts(0.0f, 0.0f, 0.0f);
+            if (++phase_check_tick >= PHASE_CHECK_ZERO_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_B; }
+            break;
+
+        case PHASE_CHECK_B:
+            pwm_apply_phase_volts(PHASE_CHECK_V_RETURN, PHASE_CHECK_V_MAIN, PHASE_CHECK_V_RETURN);
+            if (++phase_check_tick >= PHASE_CHECK_HOLD_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_ZERO_B; }
+            break;
+
+        case PHASE_CHECK_ZERO_B:
+            pwm_apply_phase_volts(0.0f, 0.0f, 0.0f);
+            if (++phase_check_tick >= PHASE_CHECK_ZERO_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_C; }
+            break;
+
+        case PHASE_CHECK_C:
+            pwm_apply_phase_volts(PHASE_CHECK_V_RETURN, PHASE_CHECK_V_RETURN, PHASE_CHECK_V_MAIN);
+            if (++phase_check_tick >= PHASE_CHECK_HOLD_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_ZERO_C; }
+            break;
+
+        case PHASE_CHECK_ZERO_C:
+            pwm_apply_phase_volts(0.0f, 0.0f, 0.0f);
+            if (++phase_check_tick >= PHASE_CHECK_ZERO_TICKS)
+            { phase_check_tick = 0; phase_check_stage = PHASE_CHECK_DONE; }
+            break;
+
+        case PHASE_CHECK_DONE:
+        default:
+            pwm_apply_phase_volts(0.0f, 0.0f, 0.0f);
+            sysid_stage = SYSID_STAGE_IDLE;
+            break;
+    }
+}
+
+// =============================================================================
+// run_shunt_noise — holds a static zero-vector command (PWM switching, zero
+// commanded current, no rotor motion) for a long window so every phase
+// current sample is pure noise floor: shunt/amp thermal+quantization noise
+// plus whatever switching noise leaks through the ADC's sample timing. No
+// current loop, no alignment kick beyond the normal ALIGN stage -- rotor
+// alignment doesn't matter here since nothing is being commutated.
+// =============================================================================
+#define SHUNT_NOISE_TICKS   100000u   /* 5s @ 20kHz -- long enough for a clean std/PSD estimate */
+
+static uint32_t shunt_noise_tick = 0u;
+
+static void run_shunt_noise(void)
+{
+    current_feedback_get_phase_amps(&ia_meas, &ib_meas, &ic_meas);
+
+    if (shunt_noise_tick == 0u)
+    {
+        /* One-time transition, not per-tick -- see SHUNT_NOISE_PWM_ENABLE
+         * in config.h. pwm_disable() only clears MOE (bridge outputs static);
+         * TIM1 keeps running the same ADC injected-trigger cadence either
+         * way, so this isolates switching-induced content from intrinsic
+         * shunt/amp/ADC noise without changing the sample timing. */
+    #if SHUNT_NOISE_PWM_ENABLE
+        pwm_enable();
+    #else
+        pwm_disable();
+    #endif
+    }
+
+    foc_vd_applied = 0.0f;
+    foc_vq_applied = 0.0f;
+    pwm_apply_dq(0.0f, 0.0f, 0.0f);
+
+    if (++shunt_noise_tick >= SHUNT_NOISE_TICKS)
+    {
+        shunt_noise_tick = 0u;
+        pwm_enable();          /* restore normal state before idling */
+        sysid_stage       = SYSID_STAGE_IDLE;
+    }
+}
+
+
+// =============================================================================
 // foc_sysid_step — called from TIM1_UP_TIM10_IRQHandler at 20 kHz
 // =============================================================================
 #define SYSID_ALIGN_REPEATS   10u
@@ -907,6 +1409,7 @@ void foc_sysid_step(void)
         case SYSID_STAGE_ALIGN:
         {
             if (sysid_align_tick < 20000u)
+            //if (1)
             {
                 foc_vd_applied = V_ALIGN;
                 foc_vq_applied = 0.0f;
@@ -990,6 +1493,14 @@ void foc_sysid_step(void)
             run_cl_pos_chirp();
         #elif SYSID_TEST == SYSID_TEST_CINE_SWEEP
             run_cine_sweep();
+        #elif SYSID_TEST == SYSID_TEST_PHASE_CHECK
+            run_phase_check();
+        #elif SYSID_TEST == SYSID_TEST_SHUNT_NOISE
+            run_shunt_noise();
+        #elif SYSID_TEST == SYSID_TEST_FRICTION_SWEEP
+            run_friction_sweep();
+        #elif SYSID_TEST == SYSID_TEST_BREAKAWAY
+            run_breakaway();
         #endif
         }
         break;
@@ -1030,23 +1541,45 @@ void foc_sysid_step(void)
 
     /* Closed-loop velocity step:
      *   sysid_f slot -> velocity command [mrad/s]
-     *   last slot    -> measured velocity [counts/s]
+     *   last slot    -> measured velocity [counts/s / VEL_TELEM_DIV]
      */
     int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
-    int16_t last_slot    = (int16_t)vel_meas_counts;
+    int16_t last_slot    = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
 
 #elif SYSID_TEST == SYSID_TEST_CL_VEL_CHIRP
 
     /* Closed-loop velocity chirp:
      *   sysid_f slot -> velocity command [mrad/s]
-     *   last slot    -> measured velocity [counts/s]
+     *   last slot    -> measured velocity [counts/s / VEL_TELEM_DIV]
      *
      * sysid_f briefly carried raw ADC1->SR instead, while root-causing the
      * SPI DMA freeze (see spi.c EXTI15_10_IRQHandler) -- that's fixed now,
      * back to vel_cmd for real Bode/plant-ID captures.
      */
     int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
-    int16_t last_slot    = (int16_t)vel_meas_counts;
+    int16_t last_slot    = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
+
+#elif SYSID_TEST == SYSID_TEST_FRICTION_SWEEP
+
+    /* Friction sweep -- same convention as CL_VEL_STEP/CL_VEL_CHIRP:
+     *   sysid_f slot -> velocity command [mrad/s]
+     *   last slot    -> measured velocity [counts/s / VEL_TELEM_DIV]
+     * iq_mA (native slot) is the actual friction-torque measurement --
+     * steady-state per-step average is done Pi-side from the tail of each
+     * ~1s hold.
+     */
+    int16_t sysid_f_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);
+    int16_t last_slot    = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
+
+#elif SYSID_TEST == SYSID_TEST_BREAKAWAY
+
+    /* Breakaway/static friction: sysid_f slot -> commanded iq [mA] (ramp
+     * value, or the handoff PI's output once breakaway is detected). last
+     * slot -> measured velocity [counts/s / VEL_TELEM_DIV], to find the
+     * exact tick breakaway occurred and read sysid_f at that same row.
+     */
+    int16_t sysid_f_slot = (int16_t)(iq_cmd * 1000.0f);
+    int16_t last_slot    = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
 
 #elif SYSID_TEST == RIPPLE_DEBUG
 
@@ -1054,7 +1587,6 @@ void foc_sysid_step(void)
      *   sysid_f slot -> actual iq command [mA]
      *   last slot    -> same measured velocity used by velocity controller
      */
-    #define VEL_TELEM_DIV 8.0f
     int16_t sysid_f_slot = (int16_t)(iq_cmd * 1000.0f);
     int16_t last_slot = (int16_t)(vel_meas_counts / VEL_TELEM_DIV);
 
@@ -1087,6 +1619,29 @@ void foc_sysid_step(void)
      * verifying ia+ib+ic ~= 0 continuously instead of at one instant. */
     int16_t sysid_f_slot = (int16_t)(ic_meas * 1000.0f);
     int16_t last_slot    = (int16_t)(iq_cmd * 1000.0f);
+
+#elif SYSID_TEST == SYSID_TEST_PHASE_CHECK
+
+    /* Per-phase DC excitation: sysid_f slot carries ic_meas [mA] (ia/ib are
+     * already natively logged in the fixed protocol below), so all three
+     * phase currents are visible every tick. last slot carries which stage
+     * is active (0=A held, 1=zero after A, 2=B held, 3=zero after B, 4=C
+     * held, 5=zero after C, 6=done) so the Pi-side script can segment the
+     * three DC steps. */
+    int16_t sysid_f_slot = (int16_t)(ic_meas * 1000.0f);
+    int16_t last_slot    = (int16_t)phase_check_stage;
+
+#elif SYSID_TEST == SYSID_TEST_SHUNT_NOISE
+
+    /* Shunt noise characterization: static zero-vector command the whole
+     * run, so every sample is pure noise floor. sysid_f slot carries
+     * ic_meas [mA] (ia/ib already natively logged below) so all three
+     * shunt channels are visible every tick. last slot carries the ADC IRQ
+     * sample counter -- a stalled/slow ADC would otherwise look identical
+     * to "very low noise" (flat repeated readings), so this makes a stall
+     * distinguishable from a genuinely quiet channel. */
+    int16_t sysid_f_slot = (int16_t)(ic_meas * 1000.0f);
+    int16_t last_slot    = (int16_t)(current_feedback_sample_count() & 0xFFFFu);
 
 #elif SYSID_TEST == SYSID_TEST_VEL_CHIRP
 
@@ -1134,7 +1689,7 @@ void foc_sysid_step(void)
      * SYSID_TEST_CL_VEL_STEP/CHIRP already use. */
 #if SYSID_TEST == SYSID_TEST_POSITION_STEP || SYSID_TEST == SYSID_TEST_CL_POS_CHIRP || SYSID_TEST == SYSID_TEST_CINE_SWEEP
     int16_t enc_hi_slot = (int16_t)(vel_cmd_rad_sec * 1000.0f);   /* vel_cmd  [mrad/s]   */
-    int16_t enc_lo_slot = (int16_t)vel_meas_counts;                /* vel_meas [counts/s] */
+    int16_t enc_lo_slot = (int16_t)(vel_meas_counts / VEL_TELEM_DIV); /* vel_meas [counts/s / VEL_TELEM_DIV] */
 #elif SYSID_TEST == SYSID_TEST_CL_VEL_CHIRP
     /* enc_hi repurposed to carry the velocity controller's own output
      * (iq_cmd, what it's actually asking the current loop for) -- not
@@ -1148,10 +1703,33 @@ void foc_sysid_step(void)
      * directly proves/disproves the stall instead of inferring it. */
     int16_t enc_hi_slot = (int16_t)(iq_cmd * 1000.0f);             /* iq_cmd   [mA]       */
     int16_t enc_lo_slot = (int16_t)(current_feedback_sample_count() & 0xFFFFu); /* ADC IRQ counter */
+#elif SYSID_TEST == SYSID_TEST_BREAKAWAY
+    /* enc_hi repurposed to carry breakaway_phase (BreakawayPhase enum) so
+     * the Pi-side script can segment ramp/handoff/settle without guessing
+     * from the iq_cmd shape. enc_lo left at its normal raw-encoder-position
+     * low word -- cheap smoothness/no-hard-stop check, same as the friction
+     * sweep's default handling. */
+    int16_t enc_hi_slot = (int16_t)breakaway_phase;
+    int16_t enc_lo_slot = (int16_t)(enc_pos & 0xFFFF);
 #else
     int16_t enc_hi_slot = (int16_t)(enc_pos >> 16);
     int16_t enc_lo_slot = (int16_t)(enc_pos & 0xFFFF);
 #endif
+
+    /* ALIGN-stage override, independent of SYSID_TEST -- carries the DRV8353's
+     * own fault registers (FAULT_STATUS_1, VGS_STATUS_2), captured once at
+     * boot right after drv_enable_high() in main(), so a driver-detected
+     * gate-drive/VDS fault on a specific half-bridge shows up in the CSV
+     * directly without needing the debugger's register view (unreliable
+     * this session, same reason g_reset_cause above is telemetry-routed
+     * instead of breakpoint-inspected). */
+    if (sysid_stage == SYSID_STAGE_ALIGN)
+    {
+        extern volatile uint16_t g_drv_fault_status_1;
+        extern volatile uint16_t g_drv_vgs_status_2;
+        enc_hi_slot = (int16_t)g_drv_fault_status_1;
+        enc_lo_slot = (int16_t)g_drv_vgs_status_2;
+    }
 
     spi_sysid_update_latest(
         enc_hi_slot,                             /* enc_hi  OR vel_cmd mrad/s      */
@@ -1211,4 +1789,7 @@ void foc_sysid_reset(void)
     cine_settle_tick = 0u;
     cine_sweep_t     = 0.0f;
     cine_sweep_angle = 0.0f;
+
+    phase_check_stage = PHASE_CHECK_A;
+    phase_check_tick  = 0u;
 }

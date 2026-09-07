@@ -85,6 +85,29 @@ void loops_reset(void)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// velocity_loop_step — velocity PI + friction feedforward, single source of
+// truth so every caller (sysid tests, real trajectory mode) gets the same
+// friction compensation instead of duplicating it inline. Fc/Fv are from
+// SYSID_TEST_FRICTION_SWEEP (stage attached, averaged across 3 repeat runs);
+// tanh() replaces a hard sign(vel_cmd) so this doesn't chatter full Coulomb
+// torque back and forth right at v=0, which every real position move
+// crosses through on its final settle. Feedforward is based on vel_cmd (the
+// reference), not vel_meas -- it supplies the expected disturbance-
+// canceling torque for where the loop is trying to go; the PI term already
+// reacts to actual measured error.
+// ─────────────────────────────────────────────────────────────────────────────
+float velocity_loop_step(float vel_cmd_rad_sec, float vel_meas_rad, float dt)
+{
+    float iq = pi_step(&velocity_loop, vel_cmd_rad_sec - vel_meas_rad, dt);
+
+    float ff_sign = tanhf(vel_cmd_rad_sec / FRICTION_FF_SMOOTH_RAD_S);
+    iq += (FRICTION_FF_COULOMB_MA * 0.001f) * ff_sign +
+          (FRICTION_FF_VISCOUS_MA_PER_RADS * 0.001f) * vel_cmd_rad_sec;
+
+    return iq;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // open_loop_step — called from TIM1 ISR when STATE_OPEN_LOOP active
 //
 // Advances electrical angle by d_theta per call, applies rotating voltage
