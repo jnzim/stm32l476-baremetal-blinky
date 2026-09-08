@@ -186,6 +186,9 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  <li>Stage integration: connect the motor to a ball screw stage, characterize the additional inertia,
  friction, compliance, and backlash, and redesign and validate the controllers for the complete
  mechanical system.</li>
+ <li>Motion execution: implement a trapezoidal trajectory generator on the STM32, driven by Pi issued
+ motion commands over SPI, and verify tracking performance of the validated cascade against a real
+ move.</li>
  </ol>
 
  <p class="step-desc">Development began at the innermost loop and progressed outward: current, velocity,
@@ -197,17 +200,11 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  a bandwidth at least three to five times lower than the loop beneath it.</p>
 
  <p class="step-desc">The current loop targets 250Hz bandwidth, verified at 2.07V/A, 2450V/(A&middot;s).
- Section 9 revisits whether a higher gain would help: raising it live on hardware produced no measurable
- improvement in any outer loop and introduced real instability, so this value stands as the deployed
- design, not a compromise.</p>
-
- <p class="step-desc">Shunt current sense noise is tracked separately (Section 9): a controlled test
- identified the oscilloscope probe's own ground clip as one confirmed contributor. A second,
- unconfirmed candidate (the ADC's injected conversion trigger not synchronized to a quiet point in the
- PWM cycle) remains open.</p>
+ This was kept conservative due to suspected shunt current sense noise at higher gain, and has not
+ been revisited since.</p>
 
  <p class="step-desc">All plant measurements were obtained from frequency response sweeps performed on
- the hardware, with the captured data analyzed offline in Python.</p>
+ the hardware, and the captured data was analyzed offline in Python.</p>
 
  <p class="step-desc"><strong style="color:var(--ink);">Current loop.</strong> The motor's electrical
  transfer function was initially calculated from its datasheet resistance and inductance, then checked
@@ -691,8 +688,29 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  (31.8Hz), the expected consequence of the reduced 39&deg; phase margin, not the stage resonating.</p>
  </div>
 
- <div style="margin-top:32px;">
- <div class="chart-title" style="margin-bottom:2px;">9.4: Real trajectory execution, following error and velocity tracking</div>
+ <div style="margin-top:36px; padding-top:26px; border-top:1px solid var(--border);">
+ <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; letter-spacing:0.11em;
+ text-transform:uppercase; color:var(--teal); font-weight:600; margin-bottom:8px;">Phase 3</div>
+ <h3 style="font-size:27px; font-weight:700; margin:0 0 14px; letter-spacing:-0.01em; text-wrap:balance;">
+ Load Compensated Servo Drive Conclusion</h3>
+ <p class="step-desc" style="margin-top:0;">Working position loop with every number measured against the
+ loaded system: friction curve, feedforward, re verified linearity, closed loop margin, step response, and
+ a resonance looking artifact correctly traced back to loop margin instead of hardware, including
+ reporting a margin (39&deg;) that came in short of the 60&deg; target, not just the wins.</p>
+ <p class="step-desc">Shunt current sense noise (flagged in Section 8 as the clear next step) was measured
+ directly: ~130mA std at zero commanded current, about 30x the ADC's own quantization noise. A controlled
+ on/off comparison isolated one real contributor: the oscilloscope probe's ground clip injecting noise
+ through a ground loop. Removing it cut the floor to ~85 to 95mA std. Still open: the ADC's
+ injected conversion trigger isn't yet synchronized to a quiet point in the PWM cycle, which is the leading
+ candidate for the rest of it. Also still open from the original plan: a Kalman velocity filter was not
+ built; instead, a real (different) bug was found and fixed in the existing velocity telemetry path
+ (an <code>int16_t</code> cast overflowing above 25 rad/s), which was a genuine problem but not the one
+ originally planned for.</p>
+ </div>
+</section>
+
+<section class="step" id="step-traj">
+ <div class="step-head"><span class="step-num">10</span><h2>Motion execution: real trajectory tracking</h2></div>
  <p class="step-desc">Past sysid characterization into an actual production move: the friction feedforward
  and corrected velocity gains ported onto a separate on STM trajectory planner branch (trapezoidal
  generator, real <code>MoveCmd</code> over SPI, not a sysid test harness), then executed a 10mm move with
@@ -726,27 +744,18 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  didn't; they stayed in almost the same 40 to 70Hz range. That rules out the mechanical hypothesis
  and points instead at the velocity loop's own ~107Hz closed loop bandwidth shaping the already characterized
  broadband shunt current noise into a hump near its crossover, the same mechanism as the position loop
- "resonance" above, one loop level down.</p>
- </div>
+ "resonance" in Section 9, one loop level down.</p>
 
  <div style="margin-top:36px; padding-top:26px; border-top:1px solid var(--border);">
  <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; letter-spacing:0.11em;
- text-transform:uppercase; color:var(--teal); font-weight:600; margin-bottom:8px;">Phase 3</div>
+ text-transform:uppercase; color:var(--teal); font-weight:600; margin-bottom:8px;">Phase 4</div>
  <h3 style="font-size:27px; font-weight:700; margin:0 0 14px; letter-spacing:-0.01em; text-wrap:balance;">
- Load Compensated Servo Drive Conclusion</h3>
- <p class="step-desc" style="margin-top:0;">Working position loop with every number measured against the
- loaded system: friction curve, feedforward, re verified linearity, closed loop margin, step response, and
- a resonance looking artifact correctly traced back to loop margin instead of hardware, including
- reporting a margin (39&deg;) that came in short of the 60&deg; target, not just the wins.</p>
- <p class="step-desc">Shunt current sense noise (flagged in Section 8 as the clear next step) was measured
- directly: ~130mA std at zero commanded current, about 30x the ADC's own quantization noise. A controlled
- on/off comparison isolated one real contributor: the oscilloscope probe's ground clip injecting noise
- through a ground loop. Removing it cut the floor to ~85 to 95mA std. Still open: the ADC's
- injected conversion trigger isn't yet synchronized to a quiet point in the PWM cycle, which is the leading
- candidate for the rest of it. Also still open from the original plan: a Kalman velocity filter was not
- built; instead, a real (different) bug was found and fixed in the existing velocity telemetry path
- (an <code>int16_t</code> cast overflowing above 25 rad/s), which was a genuine problem but not the one
- originally planned for.</p>
+ Motion Execution Conclusion</h3>
+ <p class="step-desc" style="margin-top:0;">The validated cascade drives a real production style move
+ correctly: following error matches the type-1 servo model almost exactly, and the residual velocity
+ ripple traces back to the same characterized noise source already found in Section 9, not a new
+ mechanical problem. Nothing here required new tuning; it is a verification of what Sections 3 through 9
+ already built.</p>
  </div>
 </section>
 
