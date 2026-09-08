@@ -375,11 +375,9 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
 
 <section class="step" id="step-cl">
  <div class="step-head"><span class="step-num">05</span><h2>Current loop: closed loop verification</h2></div>
- <p class="step-desc">Rather than trust the open loop plant plus assumed controller combination above, a second
- test sweeps <code>i<sub>q,cmd</sub></code> with the current PI already closed around it, measuring
- <code>H(s) = i<sub>q,meas</sub> / i<sub>q,cmd</sub></code> directly. The real open loop margin is then backed
- out algebraically using <code>L = H / (1&minus;H)</code>, with no linearity assumption about the
- controller surviving the step.</p>
+ <p class="step-desc">To verify the controller design, a chirp sweeps <code>i<sub>q,cmd</sub></code> with the
+ current PI closed around it, measuring the closed loop response <code>H(s) = i<sub>q,meas</sub> /
+ i<sub>q,cmd</sub></code> directly and comparing its achieved bandwidth against the 250Hz design target.</p>
 
  <div class="card">
  <div class="card-stats">
@@ -394,29 +392,6 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
   <span><span class="dot" style="background:var(--teal-weak)"></span>coherence 0.5 to 0.8</span>
   <span><span class="swatch" style="background:var(--amber)"></span>single pole curve fit</span>
  </div>
- </div>
-
- <div class="card" style="margin-top:16px;">
- <div class="card-stats">
-  <div><div class="cs-label">Gain crossover</div><div class="cs-value" id="stat-cl-gc">-</div></div>
-  <div><div class="cs-label">Phase margin</div><div class="cs-value" id="stat-cl-pm">-</div></div>
-  <div><div class="cs-label">Gain margin</div><div class="cs-value">No 2nd crossing <span style="font-size:11px;color:var(--ink-faint)">(to 1500Hz)</span></div></div>
- </div>
- <div class="chart-title">Backed out open loop: L(s) = H(s) / (1 &minus; H(s))</div>
- <div id="chart-cl-loop"></div>
- <div class="legend">
-  <span><span class="swatch" style="background:var(--amber)"></span>L(s), backed out from measured H</span>
-  <span><span class="swatch" style="background:var(--coral)"></span>gain crossover</span>
- </div>
- </div>
-
- <div class="callout">
- <strong>Predicted vs. measured gap.</strong> Measured PM (83.3&deg;) runs about 6&deg; under the
- 89.5&deg; predicted from ideal pole zero cancellation, consistent with one computational/PWM tick of
- delay at 20kHz (360&deg; &times; 313Hz &times; 50&micro;s &approx; 5.6&deg;). Measured crossover
- (313.3Hz) also runs about 20% above the 259.9Hz prediction: the deployed <code>Ki/Kp</code> ratio
- (1183.6/s) doesn't exactly match the CSD fitted <code>R/L</code> (1162.4/s), so the PI zero doesn't
- fully cancel the plant pole, leaving a small residual that shifts the effective crossover.
  </div>
 </section>
 
@@ -915,14 +890,6 @@ bodeChart(document.getElementById('chart-cl-h'), {
  {type:'line', x:DATA.cl_measured.f_fit, y:DATA.cl_measured.phase_fit, color:getComputedStyle(document.documentElement).getPropertyValue('--amber'), width:2},
  ],
  markers: [{f: DATA.cl_measured.bw_fit_hz, label:'BW(fit)='+DATA.cl_measured.bw_fit_hz.toFixed(0)+'Hz'}]
-});
-
-// --- CL backed-out loop gain chart ---
-bodeChart(document.getElementById('chart-cl-loop'), {
- fMin: Math.max(1, Math.min(...DATA.cl_loop.f)), fMax: 1500,
- magSeries: [ {type:'line', x:DATA.cl_loop.f, y:DATA.cl_loop.mag, color:getComputedStyle(document.documentElement).getPropertyValue('--amber'), width:2} ],
- phaseSeries: [ {type:'line', x:DATA.cl_loop.f, y:DATA.cl_loop.phase, color:getComputedStyle(document.documentElement).getPropertyValue('--amber'), width:2} ],
- markers: [{f: DATA.cl_loop.gc, label:'gc='+DATA.cl_loop.gc.toFixed(0)+'Hz, PM='+DATA.cl_loop.pm.toFixed(1)+'°'}]
 });
 </script>
 
