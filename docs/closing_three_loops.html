@@ -213,12 +213,13 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  margin, and a closed loop sweep was performed to verify the achieved bandwidth and current tracking.</p>
 
  <p class="step-desc"><strong style="color:var(--ink);">Velocity loop.</strong> The velocity plant was
- measured with the current loop closed underneath it. A direct open loop sweep produced unreliable
- results below approximately 10Hz, suspected friction. To improve low frequency characterization, the
- velocity loop was first stabilized with a proportional controller. Its closed loop transfer function was
- measured, and the underlying plant was backed out from the known controller and closed loop response. A
- PI velocity controller was then designed using pole zero cancellation, targeting an 80Hz bandwidth. The
- completed loop was swept again to verify its closed loop response.</p>
+ measured with the current loop closed underneath it. A direct open loop iq to velocity sweep was
+ unstable below about 10.5Hz: the P-only current loop couldn't reject the growing back-EMF disturbance
+ as the unconstrained rotor spun up during long low frequency dwells. Closing a light proportional
+ velocity loop first stabilized this, and the underlying plant was backed out algebraically from its
+ known controller and measured closed loop response. A PI velocity controller was then designed using
+ pole zero cancellation, targeting a 50Hz bandwidth. The completed loop was swept again, independently,
+ to verify its real closed loop response.</p>
 
  <p class="step-desc"><strong style="color:var(--ink);">Position loop.</strong> The position loop plant
  combines the measured closed loop velocity response with the integration from velocity to position.
@@ -231,9 +232,9 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
 <section class="step" id="step-hw">
  <div class="step-head"><span class="step-num">02</span><h2>Hardware &amp; firmware architecture</h2></div>
  <p class="step-desc">Everything below runs on hardware and firmware built from scratch for this project: an
- STM32F411 driving a TI DRV8353RS gate driver, with a Raspberry Pi 5 as a telemetry sink and offline analysis
- host. No vendor motor control SDK: the ISR structure, PWM/ADC synchronization, and all three control
- loops are custom, not provided by a vendor framework.</p>
+ STM32F411 driving a TI DRV8353RS gate driver, with a Raspberry Pi 5 that logs telemetry and runs the
+ offline analysis. No vendor motor control SDK: the ISR structure, PWM/ADC synchronization, and all three
+ control loops are custom, not provided by a vendor framework.</p>
 
  <div class="card">
  <svg class="bode" viewBox="0 0 920 300" width="100%" style="display:block;overflow:visible">
@@ -421,8 +422,10 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
 
 <section class="step" id="step-vel">
  <div class="step-head"><span class="step-num">06</span><h2>Velocity loop: plant identification</h2></div>
- <p class="step-desc">Same method as the current loop, one loop out. The mechanical plant is identified by
- closing a light P only velocity loop and backing out the open loop response algebraically using
+ <p class="step-desc">A direct open loop sweep here was unstable below about 10.5Hz: an unconstrained rotor
+ spinning up during long low frequency dwells grows a back-EMF disturbance that a P-only current loop
+ can't reject. So the mechanical plant is instead identified by closing a light P only velocity loop
+ first, then backing out the open loop response algebraically using
  <code>H = L/(1+L) &rArr; L = H/(1&minus;H) &rArr; P(s) = L(s)/K<sub>p</sub></code>, the same identity used
  for the current loop, extended one step since <code>C(s)=K<sub>p</sub></code> is a real constant for a
  P only controller.</p>
