@@ -682,15 +682,10 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  loaded system: friction curve, feedforward, re verified linearity, closed loop margin, step response, and
  a resonance looking artifact correctly traced back to loop margin instead of hardware, including
  reporting a margin (39&deg;) that came in short of the 60&deg; target, not just the wins.</p>
- <p class="step-desc">Shunt current sense noise (flagged in Section 8 as the clear next step) was measured
+ <p class="step-desc">Shunt current sense noise, flagged as the next step after Phase 2, was measured
  directly: ~130mA std at zero commanded current, about 30x the ADC's own quantization noise. A controlled
- on/off comparison isolated one real contributor: the oscilloscope probe's ground clip injecting noise
- through a ground loop. Removing it cut the floor to ~85 to 95mA std. Still open: the ADC's
- injected conversion trigger isn't yet synchronized to a quiet point in the PWM cycle, which is the leading
- candidate for the rest of it. Also still open from the original plan: a Kalman velocity filter was not
- built; instead, a real (different) bug was found and fixed in the existing velocity telemetry path
- (an <code>int16_t</code> cast overflowing above 25 rad/s), which was a genuine problem but not the one
- originally planned for.</p>
+ test isolated one real contributor: the oscilloscope probe's ground clip injecting noise through a
+ ground loop. Removing it cut the floor to ~85 to 95mA std. The remaining noise is still open.</p>
  </div>
 </section>
 
