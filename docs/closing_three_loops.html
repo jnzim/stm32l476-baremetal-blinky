@@ -750,6 +750,9 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  unexplained.</li>
  <li>Trajectory execution velocity ripple was traced to velocity loop bandwidth shaped shunt noise by
  elimination (mechanical causes ruled out), not independently confirmed.</li>
+ <li>Position loop steady state error during ramp tracking (<code>E<sub>ss</sub>=v/K<sub>p</sub></code>,
+ measured ~55&micro;m at 10mm/s) should be removed with velocity feedforward, not an added integrator:
+ an integrator would cost phase margin this loop doesn't have (39&deg; achieved vs. 60&deg; target).</li>
  </ul>
 </section>
 
