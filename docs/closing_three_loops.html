@@ -439,8 +439,8 @@ tau = 12.44 ms (fc = 12.79 Hz)</div>
  = 1/&tau;</code> cancels the plant's pole, leaving a pure integrator loop, with <code>K<sub>p</sub></code>
  then sized for the 50Hz target crossover from step 06: <code>K<sub>p</sub> = 2&pi;&middot;f<sub>c,target</sub>&middot;&tau;/K
  = 0.0205</code>. An ideal integrator loop has 90&deg; phase margin everywhere and <code>gc = BW</code> exactly;
- real discretization delay eats some of that margin, which is what closing the loop and measuring it directly
- (rather than trusting the ideal design) is for.</p>
+ real discretization delay eats some of that margin, which is what closing the loop and measuring it
+ directly is good engineering discipline for.</p>
 
  <div class="formula">C(s) = Kp + Ki/s  P(s) = K / (&tau;s + 1)
 
