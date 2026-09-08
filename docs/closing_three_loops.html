@@ -215,7 +215,8 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  <p class="step-desc"><strong style="color:var(--ink);">Velocity loop.</strong> The velocity plant was
  measured with the current loop closed underneath it. A direct open loop iq to velocity sweep was
  unstable below about 10.5Hz for reasons not fully understood; back EMF was suspected but doesn't fully
- fit, since measured velocity stayed low. Closing a light proportional
+ fit, since measured velocity stayed low, and friction was considered but should be light on this
+ unloaded motor. A workaround was found regardless: closing a light proportional
  velocity loop first stabilized this, and the underlying plant was backed out algebraically from its
  known controller and measured closed loop response. A PI velocity controller was then designed using
  pole zero cancellation, targeting a 50Hz bandwidth. The completed loop was swept again, independently,
@@ -393,14 +394,20 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
   <span><span class="swatch" style="background:var(--amber)"></span>single pole curve fit</span>
  </div>
  </div>
+
+ <p class="step-desc" style="margin-top:14px;font-size:13px;">Measured bandwidth lands a bit above the
+ 250Hz target: the deployed <code>K<sub>i</sub>/K<sub>p</sub></code> ratio (1183.6/s) doesn't exactly
+ match the CSD fitted <code>R/L</code> (1162.4/s) from section 3, so the PI zero doesn't fully cancel
+ the plant pole, leaving a small residual that shifts the achieved crossover higher.</p>
 </section>
 
 <section class="step" id="step-vel">
  <div class="step-head"><span class="step-num">06</span><h2>Velocity loop: plant identification</h2></div>
  <p class="step-desc">A direct open loop sweep here was unstable below about 10.5Hz. Root cause not fully
  understood: back EMF was suspected, but measured velocity stayed low, which doesn't fit that
- explanation. So the mechanical plant is instead identified by closing a light P only velocity loop
- first, then backing out the open loop response algebraically using
+ explanation; friction was also considered, but should be light on this unloaded motor. A workaround
+ was found regardless: the mechanical plant is instead identified by closing a light P only velocity
+ loop first, then backing out the open loop response algebraically using
  <code>H = L/(1+L) &rArr; L = H/(1&minus;H) &rArr; P(s) = L(s)/K<sub>p</sub></code>, the same identity used
  for the current loop, extended one step since <code>C(s)=K<sub>p</sub></code> is a real constant for a
  P only controller.</p>
