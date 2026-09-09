@@ -385,8 +385,7 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
  <div class="card">
  <div class="card-stats">
   <div><div class="cs-label">DC gain</div><div class="cs-value" id="stat-cl-dc">-</div></div>
-  <div><div class="cs-label">-3dB BW (raw)</div><div class="cs-value" id="stat-cl-bw-raw">-</div></div>
-  <div><div class="cs-label">-3dB BW (curve fit)</div><div class="cs-value" id="stat-cl-bw-fit">-</div></div>
+  <div><div class="cs-label">-3dB BW</div><div class="cs-value" id="stat-cl-bw-raw">-</div></div>
  </div>
  <div class="chart-title">Closed loop response: H(s) = i<sub>q,meas</sub> / i<sub>q,cmd</sub>, measured</div>
  <div id="chart-cl-h"></div>
@@ -397,11 +396,9 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
  </div>
  </div>
 
- <p class="step-desc" style="margin-top:14px;font-size:13px;">The raw and curve fit BW numbers differ
- from each other (300Hz vs. 362Hz) because they're two different readings of the same noisy dataset:
- raw is the -3dB point read directly off the measured points, curve fit is the -3dB point of a
- single pole model fit through them. Both also run above the 259.9Hz analytical prediction from
- section 4's ideal pole zero cancellation. One unconfirmed lead: the deployed <code>K<sub>i</sub>/K<sub>p</sub></code>
+ <p class="step-desc" style="margin-top:14px;font-size:13px;">Measured bandwidth (300Hz) runs above the
+ 259.9Hz analytical prediction from section 4's ideal pole zero cancellation. One unconfirmed lead: the
+ deployed <code>K<sub>i</sub>/K<sub>p</sub></code>
  (1183.6/s) is placed against the CSD fitted <code>R/L</code> (1162.4/s, only 1.8% off), so the zero
  cancellation matches the fitted plant, not the datasheet. But swapping in the datasheet's nominal
  inductance (1.02mH vs. the fitted 1.275mH) into <code>gc=K<sub>p</sub>/(2&pi;L)</code> predicts 323Hz,
