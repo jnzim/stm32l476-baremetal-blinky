@@ -213,10 +213,11 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  margin, and a closed loop sweep was performed to verify the achieved bandwidth and current tracking.</p>
 
  <p class="step-desc"><strong style="color:var(--ink);">Velocity loop.</strong> The velocity plant was
- measured with the current loop closed underneath it. A direct open loop iq to velocity sweep was
- unstable below about 10.5Hz for reasons not fully understood; back EMF was suspected but doesn't fully
- fit, since measured velocity stayed low, and friction was considered but should be light on this
- unloaded motor. A workaround was found regardless: closing a light proportional
+ measured with the current loop closed underneath it. A direct open loop iq to velocity sweep became
+ unusable below about 10.5Hz (large excursions; true dynamic instability not confirmed) for reasons not
+ fully understood; back EMF was suspected but doesn't fully fit, since measured velocity stayed low, and
+ friction was considered but should be light on this unloaded motor. A workaround was found regardless:
+ closing a light proportional
  velocity loop first stabilized this, and the underlying plant was backed out algebraically from its
  known controller and measured closed loop response. A PI velocity controller was then designed using
  pole zero cancellation, targeting a 50Hz bandwidth. The completed loop was swept again, independently,
@@ -410,9 +411,10 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
 
 <section class="step" id="step-vel">
  <div class="step-head"><span class="step-num">06</span><h2>Velocity loop: plant identification</h2></div>
- <p class="step-desc">A direct open loop sweep here was unstable below about 10.5Hz. Root cause not fully
- understood: back EMF was suspected, but measured velocity stayed low, which doesn't fit that
- explanation; friction was also considered, but should be light on this unloaded motor. A workaround
+ <p class="step-desc">A direct open loop sweep here became unusable below about 10.5Hz (large excursions;
+ true dynamic instability not confirmed). Root cause not fully understood: back EMF was suspected, but
+ measured velocity stayed low, which doesn't fit that explanation; friction was also considered, but
+ should be light on this unloaded motor. A workaround
  was found regardless: the mechanical plant is instead identified by closing a light P only velocity
  loop first, then backing out the open loop response algebraically using
  <code>H = L/(1+L) &rArr; L = H/(1&minus;H) &rArr; P(s) = L(s)/K<sub>p</sub></code>, the same identity used
@@ -637,19 +639,22 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  <div class="chart-title" style="margin-bottom:2px;">9.3: New position loop, design and verification</div>
  <p class="step-desc">With a confirmed linear system to design against, re derived <code>K<sub>p,pos</sub></code>
  with the same phase margin method as Section 8 (target crossover, gain sized off the <em>measured</em>
- response there, not assumed unity), giving <code>K<sub>p,pos</sub>=205.5</code>, then closed loop verified
- it two ways.</p>
+ response there, not assumed unity), giving <code>K<sub>p,pos</sub>=205.5</code>. Closed loop verification
+ measured only 39&deg; PM against the 60&deg; target, so the gain was backed off to <code>K<sub>p,pos</sub>=100</code>
+ and re verified.</p>
  <div class="card">
   <div class="card-stats">
-  <div><div class="cs-label">Gain crossover</div><div class="cs-value" style="color:var(--teal)">31.8 Hz</div></div>
-  <div><div class="cs-label">Phase margin</div><div class="cs-value" style="color:var(--coral)">39.0&deg;</div><div class="cs-label" style="margin-top:2px">target was 60&deg;</div></div>
-  <div><div class="cs-label">Gain margin</div><div class="cs-value">12.3 dB</div></div>
+  <div><div class="cs-label">Gain crossover</div><div class="cs-value" style="color:var(--teal)">18.91 Hz</div></div>
+  <div><div class="cs-label">Phase margin</div><div class="cs-value" style="color:var(--teal)">70.6&deg;</div><div class="cs-label" style="margin-top:2px">target was 60&deg;</div></div>
+  <div><div class="cs-label">Gain margin</div><div class="cs-value">22.0 dB</div></div>
   </div>
   <div class="chart-title">Closed loop position chirp, stage attached: H<sub>pos</sub>(s) = pos<sub>meas</sub> / pos<sub>cmd</sub></div>
   <div id="chart-pos-cl-phase2"></div>
   <div class="legend">
   <span><span class="dot" style="background:var(--teal)"></span>measured, coherence &ge;0.8</span>
   </div>
+  <p class="step-desc" style="margin-top:10px;font-size:13px;">Chart above still shows the earlier
+  <code>K<sub>p,pos</sub>=205.5</code> capture; pending refresh against the new gain.</p>
  </div>
  <div class="card" style="margin-top:16px;">
   <div class="card-stats">
@@ -662,6 +667,8 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
   <span><span class="swatch" style="background:var(--ink-faint)"></span>pos_cmd</span>
   <span><span class="swatch" style="background:var(--teal)"></span>pos_meas</span>
   </div>
+  <p class="step-desc" style="margin-top:10px;font-size:13px;">Also measured against the old
+  <code>K<sub>p,pos</sub>=205.5</code> gain; not yet re captured at 100.</p>
  </div>
  </div>
 
@@ -677,7 +684,8 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  </div>
  <p style="margin:14px 0 0; font-size:15px;">Clean, coherence 0.98+, no bump anywhere. Since the plant itself
  showed nothing there, the peak is the position loop's own closed loop peaking at its measured crossover
- (31.8Hz), the expected consequence of the reduced 39&deg; phase margin, not the stage resonating.</p>
+ (31.8Hz), the expected consequence of the reduced 39&deg; phase margin, not the stage resonating. This is
+ what motivated backing the gain off to <code>K<sub>p,pos</sub>=100</code> above.</p>
  </div>
 
  <div style="margin-top:36px; padding-top:26px; border-top:1px solid var(--border);">
@@ -687,8 +695,8 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  Load Compensated Servo Drive Conclusion</h3>
  <p class="step-desc" style="margin-top:0;">Working position loop with every number measured against the
  loaded system: friction curve, feedforward, re verified linearity, closed loop margin, step response, and
- a resonance looking artifact traced back to loop margin instead of hardware. The achieved phase margin,
- 39&deg;, came in short of the 60&deg; target.</p>
+ a resonance looking artifact traced back to loop margin instead of hardware. The first gain (205.5) came
+ in short of the 60&deg; margin target at 39&deg; and was backed off to 100, restoring 70.6&deg; PM.</p>
  <p class="step-desc">Shunt current sense noise, flagged as the next step after Phase 2, was measured
  directly: ~130mA std at zero commanded current, about 30x the ADC's own quantization noise. A controlled
  test isolated one real contributor: the oscilloscope probe's ground clip injecting noise through a
@@ -738,17 +746,19 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
 <section class="step" id="step-open">
  <div class="step-head"><span class="step-num">11</span><h2>Open items</h2></div>
  <ul class="step-desc" style="padding-left:1.3em; margin-top:0;">
- <li>Position loop phase margin came in short of target (39&deg; achieved vs. 60&deg;), not re tuned.</li>
  <li>Shunt current sense noise caps current loop bandwidth; not the active constraint today (mechanical
  resonance is), but would become the next one if that's fixed.</li>
  <li>Open loop velocity sweep became unusable below 10.5Hz (large excursions); true dynamic instability
  not confirmed, root cause not understood.</li>
- <li>Remaining shunt noise floor (~85 to 95mA std) unexplained.</li>
+ <li>Remaining shunt noise floor (~85 to 95mA std) unexplained. Meaningful reduction here would likely
+ benefit the whole project.</li>
  <li>Position loop steady state error (<code>E<sub>ss</sub>=v/K<sub>p</sub></code>, ~55&micro;m at 10mm/s)
  should be fixed with velocity feedforward, not an added integrator (would cost margin this loop
  doesn't have).</li>
- <li>Current loop measured bandwidth (300Hz) runs above the 250Hz target/259.9Hz prediction; datasheet
- inductance correlates better (323Hz) but unconfirmed. Margin stays healthy (83.3&deg;).</li>
+ <li>Current loop measured bandwidth (300Hz) runs above the 250Hz target/259.9Hz prediction; root cause
+ not isolated. Margin stays healthy (83.3&deg;).</li>
+ <li>Position loop step response and bode chart in Section 9.3 still show the old K<sub>p,pos</sub>=205.5
+ capture; pending re capture at the new K<sub>p,pos</sub>=100.</li>
  </ul>
 </section>
 
