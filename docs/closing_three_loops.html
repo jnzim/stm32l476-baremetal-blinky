@@ -293,7 +293,7 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
   <line x1="840" y1="116" x2="840" y2="235" stroke="var(--ink-dim)" stroke-width="1.2"/>
   <line x1="840" y1="235" x2="330" y2="235" stroke="var(--ink-dim)" stroke-width="1.2"/>
   <line x1="330" y1="235" x2="330" y2="162" stroke="var(--ink-dim)" stroke-width="1.2" marker-end="url(#arrow)"/>
-  <text x="585" y="249" text-anchor="middle" font-size="10.5" fill="var(--ink-dim)">encoder (quadrature, TIM2, via line driver)</text>
+  <text x="585" y="249" text-anchor="middle" font-size="10.5" fill="var(--ink-dim)">encoder (quadrature, TIM2, via line receiver)</text>
  </svg>
  </div>
 
@@ -306,14 +306,15 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
   conversion group, hardware triggered off the same PWM timer and serviced in an ISR, so current
   sampling is phase locked to the switching edge, not free running. Rotor position is an incremental
   quadrature encoder read entirely in hardware by TIM2's encoder mode counter (both edges, 32-bit,
-  no software pulse counting), signal conditioned through a line driver.</p>
+  no software pulse counting), signal conditioned through a line receiver.</p>
   </div>
   <div>
   <div class="cs-label" style="margin-bottom:8px;">Control &amp; comms</div>
   <p style="font-size:13.5px;color:var(--ink-dim);margin:0 0 8px;">Three nested loops share the 20kHz
   ISR: current every tick, velocity every 4th (5kHz), position every 20th (1kHz). The DRV8353 gate
-  driver is configured and monitored over SPI1. A second SPI bus free runs telemetry to the Raspberry
-  Pi 5, which does all offline system ID and Bode analysis in Python (Welch/CSD cross spectral
+  driver is configured and monitored over SPI1. A second SPI peripheral streams fixed format telemetry
+  frames to the Raspberry Pi 5 under Pi generated clocking, which does all offline system ID and Bode
+  analysis in Python (Welch/CSD cross spectral
   estimation, nonlinear least squares fits). Nothing below runs on device.</p>
   </div>
  </div>
@@ -722,15 +723,6 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  nearly the entire cruise, 99th percentile 53.5&micro;m, not a transient spike) and ~5.0&micro;m, closely
  match the model. Velocity feedforward is the natural next step for reducing this error without increasing
  position loop gain.</p>
- <p class="step-desc">The velocity trace also showed real ripple on the cruise (std &approx;0.23 to 0.35mm/s).
- FFT'd it rather than guessing: at 10mm/s the peaks formed a harmonic family near 35 to 80Hz, and 5Hz is
- exactly the mechanical rotation rate at that speed, suggestive of cogging, encoder eccentricity, or
- a lead screw pitch imperfection (all position synchronous). Re ran the same move at 1mm/s to test that
- hypothesis directly: a position synchronous source should drop the peaks 10x, to ~0.5 to 8Hz. They
- didn't; they stayed in almost the same 40 to 70Hz range. That rules out the mechanical hypothesis
- and points instead at the velocity loop's own ~107Hz closed loop bandwidth shaping the already characterized
- broadband shunt current noise into a hump near its crossover, the same mechanism as the position loop
- "resonance" in Section 9, one loop level down.</p>
 
  <div style="margin-top:36px; padding-top:26px; border-top:1px solid var(--border);">
  <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; letter-spacing:0.11em;
@@ -738,10 +730,8 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  <h3 style="font-size:27px; font-weight:700; margin:0 0 14px; letter-spacing:-0.01em; text-wrap:balance;">
  Motion Execution Conclusion</h3>
  <p class="step-desc" style="margin-top:0;">The validated cascade drives a real production style move
- correctly: following error matches the type-1 servo model almost exactly, and the residual velocity
- ripple traces back to the same characterized noise source already found in Section 9, not a new
- mechanical problem. Nothing here required new tuning; it is a verification of what Sections 3 through 9
- already built.</p>
+ correctly: following error matches the type-1 servo model almost exactly. Nothing here required new
+ tuning; it is a verification of what Sections 3 through 9 already built.</p>
  </div>
 </section>
 
@@ -754,8 +744,6 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  <li>Open loop velocity sweep instability below 10.5Hz: root cause not fully understood.</li>
  <li>Remaining shunt noise floor (~85 to 95mA std, after removing the ground loop contributor) is
  unexplained.</li>
- <li>Trajectory execution velocity ripple was traced to velocity loop bandwidth shaped shunt noise by
- elimination (mechanical causes ruled out), not independently confirmed.</li>
  <li>Position loop steady state error during ramp tracking (<code>E<sub>ss</sub>=v/K<sub>p</sub></code>,
  measured ~55&micro;m at 10mm/s) should be removed with velocity feedforward, not an added integrator:
  an integrator would cost phase margin this loop doesn't have (39&deg; achieved vs. 60&deg; target).</li>
@@ -918,7 +906,7 @@ bodeChart(document.getElementById('chart-cl-h'), {
  {type:'scatter', x:DATA.cl_measured.f_strong, y:DATA.cl_measured.phase_strong, color:getComputedStyle(document.documentElement).getPropertyValue('--teal'), r:1.5},
  {type:'line', x:DATA.cl_measured.f_fit, y:DATA.cl_measured.phase_fit, color:getComputedStyle(document.documentElement).getPropertyValue('--amber'), width:2},
  ],
- markers: [{f: DATA.cl_measured.bw_fit_hz, label:'BW(fit)='+DATA.cl_measured.bw_fit_hz.toFixed(0)+'Hz'}]
+ markers: [{f: DATA.cl_measured.bw_raw_hz, label:'BW='+DATA.cl_measured.bw_raw_hz.toFixed(0)+'Hz'}]
 });
 </script>
 
