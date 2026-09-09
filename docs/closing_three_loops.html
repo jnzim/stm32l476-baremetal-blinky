@@ -355,7 +355,9 @@ svg.bode .marker-label{fill:var(--coral); font-size:11px; font-weight:600;}
  <div class="step-head"><span class="step-num">04</span><h2>Current loop: controller design</h2></div>
  <p class="step-desc">The PI zero is placed at the plant pole (<code>K<sub>i</sub>/K<sub>p</sub> = R/L</code>),
  converting the open loop dynamics to a pure integrator by construction. <code>K<sub>p</sub></code> then sets
- the crossover directly.</p>
+ the crossover directly. Note the plant fit above is only coherent to 150Hz, but this design targets a
+ 250Hz crossover: above 150Hz the first order model is an extrapolation, not a direct measurement, which
+ is exactly why section 5's closed loop chirp exists as the primary check near the actual operating band.</p>
 
  <div class="formula">C(s) = Kp + Ki/s  P(s) = 1/(Ls + R)
 
@@ -395,10 +397,17 @@ gc = Kp / L   (rad/s, for perfect cancellation)</div>
  </div>
  </div>
 
- <p class="step-desc" style="margin-top:14px;font-size:13px;">Measured bandwidth lands a bit above the
- 250Hz target: the deployed <code>K<sub>i</sub>/K<sub>p</sub></code> ratio (1183.6/s) doesn't exactly
- match the CSD fitted <code>R/L</code> (1162.4/s) from section 3, so the PI zero doesn't fully cancel
- the plant pole, leaving a small residual that shifts the achieved crossover higher.</p>
+ <p class="step-desc" style="margin-top:14px;font-size:13px;">The raw and curve fit BW numbers differ
+ from each other (300Hz vs. 362Hz) because they're two different readings of the same noisy dataset:
+ raw is the -3dB point read directly off the measured points, curve fit is the -3dB point of a
+ single pole model fit through them. Both also run above the 259.9Hz analytical prediction from
+ section 4's ideal pole zero cancellation. One unconfirmed lead: the deployed <code>K<sub>i</sub>/K<sub>p</sub></code>
+ (1183.6/s) is placed against the CSD fitted <code>R/L</code> (1162.4/s, only 1.8% off), so the zero
+ cancellation matches the fitted plant, not the datasheet. But swapping in the datasheet's nominal
+ inductance (1.02mH vs. the fitted 1.275mH) into <code>gc=K<sub>p</sub>/(2&pi;L)</code> predicts 323Hz,
+ much closer to both measured numbers than the fitted-plant prediction. That's a real correlation, not
+ a confirmed mechanism: it would mean the fitted inductance overstates whatever governs the closed loop
+ response near 300Hz, for reasons not yet checked.</p>
 </section>
 
 <section class="step" id="step-vel">
@@ -518,10 +527,10 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  <h3 style="font-size:27px; font-weight:700; margin:0 0 14px; letter-spacing:-0.01em; text-wrap:balance;">
  Motor Only Servo Drive Conclusion</h3>
  <p class="step-desc" style="margin-top:0;">The cascade behaves well: ~1% overshoot into a 2%
- settling band in ~36ms. The current loop runs at a verified 255Hz, confirmed sufficient rather
+ settling band in ~36ms. The current loop runs at its 250Hz target gain, confirmed sufficient rather
  than assumed: pushing it to 500Hz and 1000Hz live on hardware left every outer loop's measured margin
  unchanged, while introducing real risk (audible noise, one genuine instability event) for no benefit,
- so the proven 255Hz gain stays. The real ceiling on outer loop bandwidth is the backlash modulated
+ so the proven 250Hz target gain stays. The real ceiling on outer loop bandwidth is the backlash modulated
  mechanical resonance found near 65 to 90Hz, not current loop speed.</p>
  </div>
 </section>
