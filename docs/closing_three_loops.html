@@ -739,21 +739,16 @@ Kp = 2&pi;&middot;fc,target&middot;&tau; / K (for perfect cancellation, target f
  <div class="step-head"><span class="step-num">11</span><h2>Open items</h2></div>
  <ul class="step-desc" style="padding-left:1.3em; margin-top:0;">
  <li>Position loop phase margin came in short of target (39&deg; achieved vs. 60&deg;), not re tuned.</li>
- <li>Shunt current sense noise currently limits how high the current loop's bandwidth can go, which
- caps headroom for the whole cascade. Not the active constraint today though: the tested 500/1000Hz
- current loop gains made no measurable difference to the outer loops, since the backlash modulated
- mechanical resonance is the binding constraint there. Would become the next real ceiling only if that
- resonance gets addressed separately.</li>
- <li>Open loop velocity sweep instability below 10.5Hz: root cause not fully understood.</li>
- <li>Remaining shunt noise floor (~85 to 95mA std, after removing the ground loop contributor) is
- unexplained.</li>
- <li>Position loop steady state error during ramp tracking (<code>E<sub>ss</sub>=v/K<sub>p</sub></code>,
- measured ~55&micro;m at 10mm/s) should be removed with velocity feedforward, not an added integrator:
- an integrator would cost phase margin this loop doesn't have.</li>
- <li>Current loop measured bandwidth (300Hz) runs well above the 250Hz design target and 259.9Hz
- analytical prediction. A datasheet inductance substitution correlates better with the measured value
- (323Hz) but isn't a confirmed mechanism, root cause not isolated. Phase margin at the achieved
- crossover remains healthy (83.3&deg;), so the gap isn't costing stability.</li>
+ <li>Shunt current sense noise caps current loop bandwidth; not the active constraint today (mechanical
+ resonance is), but would become the next one if that's fixed.</li>
+ <li>Open loop velocity sweep became unusable below 10.5Hz (large excursions); true dynamic instability
+ not confirmed, root cause not understood.</li>
+ <li>Remaining shunt noise floor (~85 to 95mA std) unexplained.</li>
+ <li>Position loop steady state error (<code>E<sub>ss</sub>=v/K<sub>p</sub></code>, ~55&micro;m at 10mm/s)
+ should be fixed with velocity feedforward, not an added integrator (would cost margin this loop
+ doesn't have).</li>
+ <li>Current loop measured bandwidth (300Hz) runs above the 250Hz target/259.9Hz prediction; datasheet
+ inductance correlates better (323Hz) but unconfirmed. Margin stays healthy (83.3&deg;).</li>
  </ul>
 </section>
 
