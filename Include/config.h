@@ -27,7 +27,7 @@
 #define SYSID_TEST_FRICTION_SWEEP           12
 #define SYSID_TEST_BREAKAWAY                13
 
-#define SYSID_TEST SYSID_TEST_VEL_CHIRP
+#define SYSID_TEST SYSID_TEST_CL_POS_CHIRP
 
 // SHUNT_NOISE_PWM_ENABLE -- 1: bridge switches normally during the noise
 // window (real operating condition, includes any switching-induced ripple).
@@ -424,9 +424,9 @@
 // =============================================================================
 
 #define CL_CURRENT_CHIRP_F_START        1.0f
-#define CL_CURRENT_CHIRP_F_END       2000.0f
-#define CL_CURRENT_CHIRP_DURATION      20.0f
-#define CL_CURRENT_CHIRP_AMPLITUDE     0.3f    // A
+#define CL_CURRENT_CHIRP_F_END       4000.0f
+#define CL_CURRENT_CHIRP_DURATION      40.0f
+#define CL_CURRENT_CHIRP_AMPLITUDE     0.2f    // A
 #define CL_CURRENT_CHIRP_SETTLE_TICKS  20u
 
 // =============================================================================
@@ -513,9 +513,10 @@
 // the stage-attached + feedforward system (bare-motor precedent above found
 // the predicted crossover landed within 5% once closed-loop verified --
 // worth repeating that check here before trusting this number blindly).
-#define POSITION_LOOP_KP        205.5f   // (rad/s) per rad of position error -- stage-attached,
-                                          // friction-feedforward-compensated, phase-margin design:
-                                          // gc=33.4Hz/PM=60.0deg/GM=10.7dB (not yet closed-loop verified)
+#define POSITION_LOOP_KP        100.0f   // (rad/s) per rad of position error -- backed off from 205.5
+                                          // (measured 39deg PM, short of 60deg target) to restore margin.
+                                          // Closed-loop verified: gc=18.91Hz, PM=70.6deg, GM=22.0dB,
+                                          // whole-system BW=31.6Hz (SYSID_TEST_CL_POS_CHIRP)
 #define POSITION_VEL_LIMIT      50.0f    // rad/s -- clamp P output, no windup state to clamp
 
 // =============================================================================
@@ -545,7 +546,7 @@
 #define CL_POS_CHIRP_F_START     0.1f     // Hz
 #define CL_POS_CHIRP_F_END     150.0f     // Hz
 #define CL_POS_CHIRP_DURATION   60.0f     // s
-#define CL_POS_CHIRP_AMPLITUDE   0.15f   // rad
+#define CL_POS_CHIRP_AMPLITUDE   0.3f   // rad
 
 // =============================================================================
 // Cine sweep — same closed-loop position chirp, but sized for FILMING. Now
